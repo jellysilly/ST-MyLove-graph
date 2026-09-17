@@ -6,8 +6,7 @@
 
 MyLove Graph turns your cast into a living relationship map: who is in love with
 whom, who trusts whom, and who cannot stand being in the same room. It lives
-behind a floating heart button, works on a phone without melting the battery,
-and speaks English and Russian.
+behind a floating heart button.
 
 [Русская версия](README.ru.md)
 
@@ -145,10 +144,3 @@ Importing replaces the current board, so export first if you want a backup.
 `export()`, `settings()`, `save()` and `instance()` (the live canvas engine).
 While the window is open, `<html>` carries the `mlg-open` class, which is handy
 for custom CSS.
-
-## Design
-
-The interface follows the *Love Potion* poster language: near-black grounds, hot
-magenta light, thin HUD frames with bracket corners, monospaced micro-labels and
-a script display face. The BASIS meters and the `528 HZ` / `404-G` marks are a
-nod to the same poster.
