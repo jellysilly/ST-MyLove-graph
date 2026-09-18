@@ -35,6 +35,28 @@ export function groups() {
     return Array.isArray(list) ? list : [];
 }
 
+/** The messages of the chat that is open right now. */
+export function chat() {
+    const context = ctx();
+    const list = context?.chat;
+    return Array.isArray(list) ? list : [];
+}
+
+/**
+ * An id for the open chat. Group chats and solo chats report it differently
+ * across ST builds, so every known spelling is tried.
+ */
+export function chatId() {
+    const context = ctx();
+    if (!context) return '';
+    const id = context.groupId
+        || (typeof context.getCurrentChatId === 'function' ? context.getCurrentChatId() : null)
+        || context.chatId
+        || context.chat_id
+        || '';
+    return String(id || '');
+}
+
 export function userName() {
     return ctx()?.name1 || 'You';
 }

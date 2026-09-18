@@ -27,6 +27,10 @@ export function el(tag, props = {}, children = []) {
             }
         }
         else if (key === 'dataset') Object.assign(node.dataset, value);
+        // onTap goes through the pointer-aware helper below; every other on*
+        // prop is a plain listener.
+        else if (key === 'onTap' && typeof value === 'function') bindTap(node, value, { guard: props.tapGuard });
+        else if (key === 'tapGuard') continue;
         else if (key.startsWith('on') && typeof value === 'function') {
             node.addEventListener(key.slice(2).toLowerCase(), value);
         } else if (key in node && key !== 'list' && typeof value !== 'object') {
@@ -60,6 +64,76 @@ export function clear(node) {
     return node;
 }
 
+/**
+ * Binds an activation handler that survives mobile browsers.
+ *
+ * Some hosts (SillyTavern's own swipe handling among them) call
+ * `preventDefault()` on touch events that travel through the document, and a
+ * prevented touch sequence never produces a `click`. Buttons wired to `click`
+ * alone then look dead on a phone while working fine on a desktop - which is
+ * exactly the "menus do not open on mobile" symptom.
+ *
+ * So: touch and pen activate on `pointerup` (with a small movement tolerance so
+ * scrolling never counts as a tap), and the `click` that may or may not follow
+ * is swallowed. Mouse and keyboard keep using `click`, which keeps Enter/Space
+ * on buttons and focus behaviour intact.
+ */
+export function bindTap(node, handler, options = {}) {
+    const guardUntil = Date.now() + (options.guard || 0);
+    let armed = false;
+    let sawPointerDown = false;
+    let startX = 0;
+    let startY = 0;
+    let firedAt = 0;
+
+    const fire = event => {
+        if (Date.now() < guardUntil) return;
+        firedAt = Date.now();
+        handler(event);
+    };
+
+    node.addEventListener('pointerdown', event => {
+        if (event.button !== undefined && event.button > 0) return;
+        sawPointerDown = true;
+        armed = event.pointerType !== 'mouse';
+        startX = event.clientX;
+        startY = event.clientY;
+    });
+
+    node.addEventListener('pointerup', event => {
+        if (!armed) return;
+        armed = false;
+        // A finger that travelled was scrolling, not tapping.
+        if (Math.hypot(event.clientX - startX, event.clientY - startY) > 14) return;
+        event.preventDefault();
+        fire(event);
+    });
+
+    node.addEventListener('pointercancel', () => {
+        armed = false;
+        sawPointerDown = false;
+    });
+
+    node.addEventListener('click', event => {
+        const wasTouch = event.pointerType && event.pointerType !== 'mouse';
+        if (Date.now() - firedAt < 700) {
+            // Already handled on pointerup - drop the synthesised click.
+            sawPointerDown = false;
+            event.preventDefault();
+            event.stopPropagation();
+            return;
+        }
+        // A click born of a touch that never pressed *this* element is a ghost:
+        // it belongs to the gesture that just put this element on screen (the
+        // classic disappearing bottom sheet), so it is not an activation.
+        if (wasTouch && !sawPointerDown) return;
+        sawPointerDown = false;
+        fire(event);
+    });
+
+    return node;
+}
+
 /** Inline SVG icon set - no icon font required, so it works on any ST theme. */
 const ICONS = {
     heart: '<path d="M12 21s-7.5-4.7-9.6-9.2C.7 8.3 2.4 4.6 5.9 3.7c2.2-.6 4.4.3 5.6 2.1l.5.8.5-.8c1.2-1.8 3.4-2.7 5.6-2.1 3.5.9 5.2 4.6 3.5 8.1C19.5 16.3 12 21 12 21z"/>',
@@ -81,6 +155,9 @@ const ICONS = {
     zoomIn: '<circle cx="11" cy="11" r="6" fill="none" stroke="currentColor" stroke-width="2"/><path d="M11 8.5v5M8.5 11h5M16 16l4 4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>',
     zoomOut: '<circle cx="11" cy="11" r="6" fill="none" stroke="currentColor" stroke-width="2"/><path d="M8.5 11h5M16 16l4 4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>',
     chevron: '<path d="m9 6 6 6-6 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>',
+    story: '<path d="M5 4.5h11a2 2 0 0 1 2 2V19a1.5 1.5 0 0 0 1.5-1.5V6" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/><path d="M5 4.5A1.5 1.5 0 0 0 3.5 6v13A1.5 1.5 0 0 0 5 20.5h13" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/><path d="M7 9h7M7 12.5h7M7 16h4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>',
+    spark: '<path d="M12 3.5 13.6 9l5.4 1.6-5.4 1.7L12 17.8l-1.6-5.5L5 10.6 10.4 9 12 3.5z" fill="currentColor"/><path d="M18.4 15.6l.7 2.2 2.1.7-2.1.7-.7 2.2-.7-2.2-2.1-.7 2.1-.7.7-2.2z" fill="currentColor"/>',
+    rewind: '<path d="M11.5 7.5v9L4.8 12l6.7-4.5zM20 7.5v9L13.3 12 20 7.5z" fill="currentColor"/>',
     group: '<circle cx="9" cy="9" r="3.2" fill="none" stroke="currentColor" stroke-width="1.8"/><circle cx="16.5" cy="10.5" r="2.4" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M3.5 19c.6-3 2.8-4.6 5.5-4.6S14 16 14.5 19M15 15c2.4 0 4.2 1.3 4.7 4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>',
 };
 

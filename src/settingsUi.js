@@ -9,6 +9,8 @@ import { el, clear, icon } from './dom.js';
 import { t, applyI18n, onLanguageChange, setLanguage, LANGUAGES } from './i18n.js';
 import { getSettings, save, animationsEnabled } from './state.js';
 import { updateFab, resetFabPosition } from './fab.js';
+import { toast } from './host.js';
+import * as chronicle from './chronicle.js';
 import * as model from './model.js';
 
 let container = null;
@@ -40,7 +42,7 @@ function segmented(options, getValue, setValue) {
             type: 'button',
             text: option.label,
             'data-active': String(getValue() === option.value),
-            onClick: () => {
+            onTap: () => {
                 setValue(option.value);
                 save();
                 buttons.forEach(b => (b.dataset.active = String(b === button)));
@@ -85,7 +87,7 @@ function renderBody() {
         el('button.mlg-btn.mlg-btn--primary.mlg-card-open', {
             type: 'button',
             text: t('set.open'),
-            onClick: () => onOpen(),
+            onTap: () => onOpen(),
         }),
     ]));
 
@@ -123,6 +125,61 @@ function renderBody() {
         toggleRow('set.autosync', () => settings.behaviour.autoSync, v => (settings.behaviour.autoSync = v)),
     ]));
 
+    const state = chronicle.status();
+    body.appendChild(el('div.mlg-set-group', {}, [
+        el('span.mlg-set-title', { text: t('set.story') }),
+        el('p.mlg-set-hint', { text: t('set.storyHint') }),
+        toggleRow('set.storyMode', () => settings.story.enabled, v => {
+            settings.story.enabled = v;
+            if (v) chronicle.advance();
+        }),
+        el('p.mlg-set-stat', {
+            text: t('set.storyStats', {
+                read: state.applied,
+                total: state.total,
+                chapter: state.chapter,
+                sparks: state.sparks,
+                settled: state.settled,
+            }),
+        }),
+        toggleRow('set.storyCast', () => settings.story.cast, v => (settings.story.cast = v)),
+        toggleRow('set.storyMentions', () => settings.story.mentions, v => (settings.story.mentions = v)),
+        toggleRow('set.storyFade', () => settings.story.fade, v => (settings.story.fade = v)),
+        el('span.mlg-set-subtitle', { text: t('set.storyPace') }),
+        segmented(
+            [
+                { value: 'gentle', label: t('story.pace.gentle') },
+                { value: 'normal', label: t('story.pace.normal') },
+                { value: 'fast', label: t('story.pace.fast') },
+            ],
+            () => settings.story.pace,
+            value => (settings.story.pace = value),
+        ),
+        el('div.mlg-set-actions', {}, [
+            el('button.mlg-btn.mlg-btn--ghost.mlg-btn--sm', {
+                type: 'button',
+                text: t('set.storyRebuild'),
+                disabled: state.busy,
+                onTap: () => {
+                    toast(t('story.rebuilding'));
+                    chronicle.rebuild(result => {
+                        toast(t('story.rebuilt', { bonds: result.revealed, souls: result.added }));
+                        refreshSettings();
+                    });
+                },
+            }),
+            el('button.mlg-btn.mlg-btn--danger.mlg-btn--sm', {
+                type: 'button',
+                text: t('set.storyForget'),
+                onTap: () => {
+                    if (!window.confirm(t('confirm.forget'))) return;
+                    chronicle.forget();
+                    refreshSettings();
+                },
+            }),
+        ]),
+    ]));
+
     body.appendChild(el('div.mlg-set-group', {}, [
         el('span.mlg-set-title', { text: t('set.lite') }),
         segmented(
@@ -141,7 +198,7 @@ function renderBody() {
         el('button.mlg-btn.mlg-btn--ghost.mlg-btn--sm', {
             type: 'button',
             text: t('set.resetPos'),
-            onClick: () => resetFabPosition(),
+            onTap: () => resetFabPosition(),
         }),
     ]));
 
@@ -160,16 +217,18 @@ export function mountSettings(openHandler) {
     inner = el('div.mlg-root.mlg-settings-inner');
     body = el('div.inline-drawer-content', {}, [inner]);
 
-    container = el('div.mlg-settings.inline-drawer', {}, [
-        el('div.inline-drawer-toggle.inline-drawer-header', {}, [
-            el('b', {}, [
-                el('span.mlg-drawer-heart', { 'aria-hidden': 'true' }, [icon('heart', 14)]),
-                ' MyLove Graph',
-            ]),
-            el('div.inline-drawer-icon.fa-solid.fa-circle-chevron-down.down'),
+    const chevron = el('div.inline-drawer-icon.fa-solid.fa-circle-chevron-down.down');
+    const header = el('div.inline-drawer-toggle.inline-drawer-header', {
+        onTap: () => ensureDrawerToggles(body, chevron),
+    }, [
+        el('b', {}, [
+            el('span.mlg-drawer-heart', { 'aria-hidden': 'true' }, [icon('heart', 14)]),
+            ' MyLove Graph',
         ]),
-        body,
+        chevron,
     ]);
+
+    container = el('div.mlg-settings.inline-drawer', {}, [header, body]);
 
     host.appendChild(container);
     renderBody();
@@ -179,6 +238,26 @@ export function mountSettings(openHandler) {
         renderBody();
         applyI18n(container);
     });
+}
+
+/**
+ * ST opens these drawers itself, through a delegated handler on
+ * `.inline-drawer-toggle`. Not every build has that handler wired by the time a
+ * third-party extension mounts - and when it is missing, the card simply never
+ * opens. So: give ST a moment, and take over only if nothing happened.
+ */
+function ensureDrawerToggles(content, chevron) {
+    const before = content.style.display;
+    setTimeout(() => {
+        const handled = content.style.display !== before
+            || content.style.height
+            || content.style.overflow;
+        if (handled) return;
+        const open = before === 'none' || before === '';
+        content.style.display = open ? 'block' : 'none';
+        chevron.classList.toggle('down', !open);
+        chevron.classList.toggle('up', open);
+    }, 90);
 }
 
 /** Re-renders the stats and control states (after a sync, for instance). */

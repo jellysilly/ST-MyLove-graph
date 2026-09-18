@@ -9,11 +9,21 @@
  *   is an order of magnitude cheaper on mobile GPUs.
  */
 
-import { REL_META, avatarSources, dominantType } from './model.js';
+import { REL_META, BOND_STAGES, avatarSources, dominantType, edgeProgress } from './model.js';
 
 const TAU = Math.PI * 2;
 const ALPHA_MIN = 0.008;
 const COOLING = 0.976;
+/** How long a newly revealed soul or bond keeps its arrival animation, in ms. */
+const REVEAL_MS = 1400;
+/** Even the faintest spark leaves this much of the way towards the other side. */
+const MIN_REACH = 0.3;
+/** Progress at which a bond is "settled" and its line reaches all the way over. */
+const FULL_AT = (BOND_STAGES.find(s => s.id === 'forming')?.upTo || 72) / 100;
+
+function easeOut(t) {
+    return 1 - Math.pow(1 - t, 3);
+}
 
 function withAlpha(hex, alpha) {
     const value = hex.replace('#', '');
@@ -127,6 +137,10 @@ export class LoveGraph {
         this.autoFitOnSettle = false;
         this.fitClock = 0;
         this.backdrop = null;
+        // While something is still arriving the loop must keep drawing, even on
+        // an otherwise settled board.
+        this.revealUntil = 0;
+        this.now = Date.now();
 
         this.images = new ImageCache(() => this.requestRender());
         this.pointers = new Map();
@@ -171,6 +185,21 @@ export class LoveGraph {
         this.start();
     }
 
+    /** Remembers that something arrived, so its entrance gets animated. */
+    noteReveal(born) {
+        const until = born + REVEAL_MS;
+        if (until > this.revealUntil) this.revealUntil = until;
+    }
+
+    /** 0 while a thing is arriving, 1 once it has fully settled in. */
+    revealFactor(born) {
+        if (typeof born !== 'number' || !this.options.animations || this.options.lite) return 1;
+        const age = this.now - born;
+        if (age >= REVEAL_MS) return 1;
+        if (age < 0) return 1;
+        return easeOut(Math.max(0, age) / REVEAL_MS);
+    }
+
     kick(alpha = 0.55) {
         this.alpha = Math.max(this.alpha, alpha);
         this.pendingSave = true;
@@ -212,6 +241,7 @@ export class LoveGraph {
                 accent: '#ff8ac4',
                 visible: true,
             };
+            if (typeof node.born === 'number') this.noteReveal(node.born);
             items.push(item);
             byId.set(node.id, item);
         });
@@ -224,6 +254,7 @@ export class LoveGraph {
             a.deg++;
             b.deg++;
             links.push({ ref: edge, a, b });
+            if (typeof edge.born === 'number') this.noteReveal(edge.born);
         }
 
         for (const item of items) {
@@ -447,11 +478,14 @@ export class LoveGraph {
             if (!link.visible || !link.a.visible || !link.b.visible) continue;
             const meta = REL_META[link.ref.type] || REL_META.friendly;
             const strength = (link.ref.strength || 50) / 100;
-            const rest = meta.rest * (1.25 - strength * 0.45);
+            const grown = edgeProgress(link.ref) / 100;
+            // A bond still forming holds the two of them further apart and pulls
+            // more weakly, so the board visibly tightens as the story goes on.
+            const rest = meta.rest * (1.25 - strength * 0.45) * (1.3 - grown * 0.3);
             const dx = link.b.x - link.a.x;
             const dy = link.b.y - link.a.y;
             const dist = Math.hypot(dx, dy) || 0.01;
-            const force = (dist - rest) * 2.5 * (0.6 + strength * 0.6);
+            const force = (dist - rest) * 2.5 * (0.6 + strength * 0.6) * (0.4 + grown * 0.6);
             const fx = (dx / dist) * force;
             const fy = (dy / dist) * force;
             link.a.dx += fx;
@@ -559,11 +593,13 @@ export class LoveGraph {
 
     animating() {
         if (!this.options.animations || this.options.lite) return false;
+        if (this.now < this.revealUntil) return true;
         return this.links.some(l => l.visible) || !!this.selection;
     }
 
     loop(timestamp) {
         this.raf = requestAnimationFrame(this.loop);
+        this.now = Date.now();
         const dt = this.last ? Math.min(0.05, (timestamp - this.last) / 1000) : 0.016;
         this.last = timestamp;
         this.time += dt;
@@ -591,6 +627,7 @@ export class LoveGraph {
     render() {
         const ctx = this.ctx;
         if (!ctx) return;
+        this.now = Date.now();
         ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
         ctx.clearRect(0, 0, this.w, this.h);
         if (this.backdrop) ctx.drawImage(this.backdrop, 0, 0, this.w, this.h);
@@ -631,26 +668,66 @@ export class LoveGraph {
         };
     }
 
+    /**
+     * The curve of a bond, optionally cut short at `t`.
+     *
+     * A bond that the story is still writing does not reach the other side yet:
+     * it is drawn as the piece of the curve it has earned so far, with the rest
+     * left as a faint trace. Splitting the quadratic with de Casteljau keeps the
+     * partial curve exactly on top of the full one.
+     */
+    edgePath(g, t) {
+        const path = new Path2D();
+        path.moveTo(g.ax, g.ay);
+        if (t >= 0.999) {
+            path.quadraticCurveTo(g.cx, g.cy, g.bx, g.by);
+            return { path, tip: { x: g.bx, y: g.by } };
+        }
+        const cx = g.ax + (g.cx - g.ax) * t;
+        const cy = g.ay + (g.cy - g.ay) * t;
+        const tip = quad(g, t);
+        path.quadraticCurveTo(cx, cy, tip.x, tip.y);
+        return { path, tip };
+    }
+
     drawEdge(link) {
         const ctx = this.ctx;
         const meta = REL_META[link.ref.type] || REL_META.friendly;
         const related = this.isRelated(link);
-        const fade = related ? 1 : 0.13;
+        const born = this.revealFactor(link.ref.born);
+        const fade = (related ? 1 : 0.13) * born;
         const strength = (link.ref.strength || 50) / 100;
-        const width = meta.width * (0.62 + strength * 0.85);
+        const grown = edgeProgress(link.ref) / 100;
+        // Even a first spark reaches a third of the way, so it always reads as
+        // "these two", never as a stray line going nowhere. The line closes the
+        // gap exactly when the bond counts as settled; after that it only keeps
+        // getting brighter.
+        const span = Math.min(1, grown / FULL_AT);
+        const reach = Math.min(1, (MIN_REACH + (1 - MIN_REACH) * span) * born);
+        const width = meta.width * (0.62 + strength * 0.85) * (0.55 + grown * 0.45);
         const g = this.edgeGeometry(link);
-
-        const path = new Path2D();
-        path.moveTo(g.ax, g.ay);
-        path.quadraticCurveTo(g.cx, g.cy, g.bx, g.by);
+        const { path, tip } = this.edgePath(g, reach);
 
         ctx.lineCap = 'round';
         ctx.lineJoin = 'round';
 
+        // The road not yet travelled: where the bond will go once it settles.
+        if (reach < 0.995) {
+            const full = new Path2D();
+            full.moveTo(g.ax, g.ay);
+            full.quadraticCurveTo(g.cx, g.cy, g.bx, g.by);
+            ctx.setLineDash([2, 9]);
+            ctx.lineDashOffset = 0;
+            ctx.strokeStyle = withAlpha(meta.color, 0.16 * fade);
+            ctx.lineWidth = 1;
+            ctx.stroke(full);
+            ctx.setLineDash([]);
+        }
+
         if (!this.options.lite) {
             ctx.setLineDash([]);
             ctx.lineDashOffset = 0;
-            ctx.strokeStyle = withAlpha(meta.glow, 0.13 * fade);
+            ctx.strokeStyle = withAlpha(meta.glow, 0.13 * fade * (0.4 + grown * 0.6));
             ctx.lineWidth = width * 4.2;
             ctx.stroke(path);
         }
@@ -661,7 +738,7 @@ export class LoveGraph {
         } else {
             ctx.lineDashOffset = 0;
         }
-        ctx.strokeStyle = withAlpha(meta.color, (0.5 + strength * 0.5) * fade);
+        ctx.strokeStyle = withAlpha(meta.color, (0.5 + strength * 0.5) * fade * (0.45 + grown * 0.55));
         ctx.lineWidth = width;
         ctx.stroke(path);
         ctx.setLineDash([]);
@@ -681,7 +758,18 @@ export class LoveGraph {
             ctx.lineDashOffset = 0;
         }
 
-        if (link.ref.dir !== 'both') {
+        // The growing end glows: this is the bond still being written.
+        if (reach < 0.995 && related) {
+            const pulse = this.options.animations && !this.options.lite
+                ? 0.65 + Math.sin(this.time * 3.2 + (link.ref.id.charCodeAt(2) || 3)) * 0.35
+                : 1;
+            ctx.beginPath();
+            ctx.arc(tip.x, tip.y, (2.4 + width * 0.5) * pulse, 0, TAU);
+            ctx.fillStyle = withAlpha(meta.glow, 0.9 * fade);
+            ctx.fill();
+        }
+
+        if (link.ref.dir !== 'both' && reach > 0.9) {
             const forward = link.ref.dir === 'a2b';
             const target = forward ? link.b : link.a;
             const control = { x: g.cx, y: g.cy };
@@ -738,10 +826,20 @@ export class LoveGraph {
         const ctx = this.ctx;
         const selected = this.selection?.type === 'node' && this.selection.id === item.id;
         const related = this.isNodeRelated(item);
-        const fade = related ? 1 : 0.22;
+        const born = this.revealFactor(item.ref.born);
+        const fade = (related ? 1 : 0.22) * born;
         const accent = item.accent;
         const hovered = this.hoverId === item.id;
-        const r = item.r * (selected ? 1.1 : hovered ? 1.05 : 1);
+        // A soul the story just brought in swells into place.
+        const r = item.r * (selected ? 1.1 : hovered ? 1.05 : 1) * (0.55 + born * 0.45);
+
+        if (born < 1) {
+            ctx.beginPath();
+            ctx.arc(item.x, item.y, r + 10 + (1 - born) * 26, 0, TAU);
+            ctx.strokeStyle = withAlpha(accent, 0.5 * (1 - born));
+            ctx.lineWidth = 2;
+            ctx.stroke();
+        }
 
         if (!this.options.lite) {
             ctx.beginPath();

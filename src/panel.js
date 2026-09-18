@@ -4,9 +4,11 @@
 
 import { el, clear, icon } from './dom.js';
 import { t, applyI18n, onLanguageChange, setLanguage, getLanguage, LANGUAGES } from './i18n.js';
-import { getSettings, save, isLite, animationsEnabled } from './state.js';
+import { getSettings, save, isLite, animationsEnabled, isTouchDevice, storyEnabled } from './state.js';
 import { LoveGraph } from './graph.js';
 import { groups } from './host.js';
+import { viewportRect } from './viewport.js';
+import * as chronicle from './chronicle.js';
 import * as model from './model.js';
 
 let root = null;
@@ -36,13 +38,15 @@ function buildToolbarButton(name, key, handler, extraClass = '') {
     const button = el('button.mlg-tool' + (extraClass ? '.' + extraClass : ''), {
         type: 'button',
         'data-i18n-title': key,
-        onClick: handler,
+        // The handler is given the button itself: a tap that lands on the inner
+        // SVG reports the icon as its target, and menus must hang off the button.
+        onTap: () => handler(button),
     }, [icon(name)]);
     return button;
 }
 
 function build() {
-    const scrim = el('div.mlg-scrim', { onClick: () => close() });
+    const scrim = el('div.mlg-scrim', { onTap: () => close() });
 
     const head = el('header.mlg-head', {}, [
         el('div.mlg-head-lead', {}, [
@@ -58,7 +62,7 @@ function build() {
             el('button.mlg-icon-btn.mlg-close', {
                 type: 'button',
                 'data-i18n-title': 'panel.close',
-                onClick: () => close(),
+                onTap: () => close(),
             }, [icon('close', 18)]),
         ]),
     ]);
@@ -82,8 +86,9 @@ function build() {
     const toolbar = el('nav.mlg-toolbar', {}, [
         el('div.mlg-tool-group', {}, [
             buildToolbarButton('sync', 'tb.sync', () => doSync()),
-            buildToolbarButton('plus', 'tb.add', e => openAddMenu(e.currentTarget)),
+            buildToolbarButton('plus', 'tb.add', anchor => openAddMenu(anchor)),
             buildToolbarButton('link', 'tb.link', () => openEdgeEditor({})),
+            buildToolbarButton('story', 'tb.story', anchor => openStoryMenu(anchor), 'mlg-tool--story'),
         ]),
         el('div.mlg-search', {}, [
             icon('search', 15),
@@ -93,9 +98,9 @@ function build() {
         el('div.mlg-tool-group', {}, [
             buildToolbarButton('fit', 'tb.fit', () => graph?.fit()),
             buildToolbarButton('shuffle', 'tb.relayout', () => graph?.relayout()),
-            buildToolbarButton('filter', 'tb.filters', e => openFilterMenu(e.currentTarget)),
-            buildToolbarButton('data', 'tb.data', e => openDataMenu(e.currentTarget)),
-            buildToolbarButton('globe', 'tb.lang', e => openLanguageMenu(e.currentTarget)),
+            buildToolbarButton('filter', 'tb.filters', anchor => openFilterMenu(anchor)),
+            buildToolbarButton('data', 'tb.data', anchor => openDataMenu(anchor)),
+            buildToolbarButton('globe', 'tb.lang', anchor => openLanguageMenu(anchor)),
         ]),
     ]);
 
@@ -110,8 +115,8 @@ function build() {
         basis,
         emptyState,
         el('div.mlg-zoom', {}, [
-            el('button.mlg-icon-btn', { type: 'button', 'aria-label': '+', onClick: () => graph?.zoomBy(1.25) }, [icon('zoomIn', 16)]),
-            el('button.mlg-icon-btn', { type: 'button', 'aria-label': '-', onClick: () => graph?.zoomBy(0.8) }, [icon('zoomOut', 16)]),
+            el('button.mlg-icon-btn', { type: 'button', 'aria-label': '+', onTap: () => graph?.zoomBy(1.25) }, [icon('zoomIn', 16)]),
+            el('button.mlg-icon-btn', { type: 'button', 'aria-label': '-', onTap: () => graph?.zoomBy(0.8) }, [icon('zoomOut', 16)]),
         ]),
         el('div.mlg-stamp', { 'aria-hidden': 'true' }, [
             el('span.mlg-stamp-code', { text: '404-G' }),
@@ -226,7 +231,19 @@ export function open() {
         syncGraph();
         if (!didFirstSync) {
             didFirstSync = true;
-            if (!model.nodes().length && getSettings().behaviour.autoSync) doSync(true);
+            const settings = getSettings();
+            const wantsWholeCast = !storyEnabled() || !settings.story.cast;
+            if (wantsWholeCast && !model.nodes().length && settings.behaviour.autoSync) {
+                doSync(true);
+            }
+            if (storyEnabled()) {
+                // Story mode fills the board from the chat, not from the card
+                // list: whoever has shown up so far, and nobody else.
+                chronicle.advance(() => {
+                    syncGraph();
+                    graph.fit();
+                });
+            }
             graph.alpha = 1;
             graph.autoFitOnSettle = true;
         }
@@ -314,7 +331,7 @@ function renderLegend() {
             type: 'button',
             'data-active': String(active),
             title: t('rel.' + type),
-            onClick: () => {
+            onTap: () => {
                 settings.filters[type] = !active;
                 save();
                 syncGraph();
@@ -388,6 +405,35 @@ function renderBasis() {
         el('span', { text: `${edges.length} ${t('hud.bonds')}` }),
         el('span.mlg-basis-hz', { text: '528 HZ' }),
     ]));
+
+    renderChronicle();
+}
+
+/**
+ * The chronicle strip: how far the story has been read, and how much of the map
+ * it has drawn so far.
+ */
+function renderChronicle() {
+    if (!basis || !storyEnabled()) return;
+    const state = chronicle.status();
+    const ratio = state.total ? Math.min(1, state.applied / state.total) : 0;
+
+    basis.appendChild(el('div.mlg-chronicle', {}, [
+        el('div.mlg-chronicle-head', {}, [
+            el('span.mlg-chronicle-tag', { text: t('hud.chronicle') }),
+            el('span.mlg-chronicle-chapter', { text: t('hud.chapter', { n: state.chapter }) }),
+            el('span.mlg-chronicle-count', { text: `${state.applied}/${state.total}` }),
+        ]),
+        el('div.mlg-chronicle-line', {}, [
+            el('i', { style: { width: Math.round(ratio * 100) + '%' } }),
+        ]),
+        el('div.mlg-chronicle-foot', {}, [
+            el('span', { text: t('hud.sparks', { n: state.sparks }) }),
+            el('span.mlg-basis-dot'),
+            el('span', { text: t('hud.settled', { n: state.settled }) }),
+            state.busy ? el('span.mlg-chronicle-busy', { text: t('story.reading') }) : null,
+        ]),
+    ]));
 }
 
 /* ------------------------------------------------------------ empty state */
@@ -397,15 +443,29 @@ function renderEmpty() {
     const isEmpty = model.nodes().length === 0;
     emptyState.hidden = !isEmpty;
     if (!isEmpty) return;
+    const story = storyEnabled();
     clear(emptyState);
     emptyState.appendChild(el('div.mlg-empty-heart', {}, [icon('heart', 44)]));
-    emptyState.appendChild(el('h3', { text: t('empty.title') }));
-    emptyState.appendChild(el('p', { text: t('empty.body') }));
-    emptyState.appendChild(el('button.mlg-btn.mlg-btn--primary', {
-        type: 'button',
-        text: t('empty.cta'),
-        onClick: () => doSync(),
-    }));
+    emptyState.appendChild(el('h3', { text: t(story ? 'empty.story.title' : 'empty.title') }));
+    emptyState.appendChild(el('p', { text: t(story ? 'empty.story.body' : 'empty.body') }));
+    emptyState.appendChild(el('div.mlg-empty-actions', {}, [
+        story ? el('button.mlg-btn.mlg-btn--primary', {
+            type: 'button',
+            text: t('empty.story.cta'),
+            onTap: () => {
+                showToast(t('story.rebuilding'));
+                chronicle.rebuild(result => {
+                    syncGraph();
+                    showToast(t('story.rebuilt', { bonds: result.revealed, souls: result.added }));
+                });
+            },
+        }) : null,
+        el('button.mlg-btn' + (story ? '.mlg-btn--ghost' : '.mlg-btn--primary'), {
+            type: 'button',
+            text: t('empty.cta'),
+            onTap: () => doSync(),
+        }),
+    ]));
 }
 
 /* -------------------------------------------------------------- inspector */
@@ -458,7 +518,7 @@ function renderInspector() {
         type: 'button',
         'data-i18n-title': 'insp.close',
         title: t('insp.close'),
-        onClick: () => {
+        onTap: () => {
             selection = null;
             graph.select(null, false);
             renderInspector();
@@ -480,6 +540,9 @@ function renderNodeInspector(node) {
             el('div.mlg-insp-tags', {}, [
                 el('span.mlg-tag', { text: t('insp.kind.' + node.kind) }),
                 node.role ? el('span.mlg-tag.mlg-tag--soft', { text: node.role }) : null,
+                node.origin === 'story' && typeof node.seen === 'number'
+                    ? el('span.mlg-tag.mlg-tag--story', { text: t('insp.enteredAt', { n: node.seen + 1 }) })
+                    : null,
                 node.missing ? el('span.mlg-tag.mlg-tag--warn', { text: t('insp.missing') }) : null,
             ]),
         ]),
@@ -493,17 +556,17 @@ function renderNodeInspector(node) {
         el('button.mlg-btn.mlg-btn--primary', {
             type: 'button',
             text: t('insp.addLink'),
-            onClick: () => openEdgeEditor({ a: node.id }),
+            onTap: () => openEdgeEditor({ a: node.id }),
         }),
         el('button.mlg-btn', {
             type: 'button',
             text: t('insp.edit'),
-            onClick: () => openNodeEditor(node),
+            onTap: () => openNodeEditor(node),
         }),
         el('button.mlg-btn.mlg-btn--ghost', {
             type: 'button',
             text: node.pinned ? t('insp.unpin') : t('insp.pin'),
-            onClick: () => {
+            onTap: () => {
                 node.pinned = !node.pinned;
                 save();
                 graph.kick(0.3);
@@ -513,7 +576,7 @@ function renderNodeInspector(node) {
         el('button.mlg-btn.mlg-btn--ghost', {
             type: 'button',
             text: t('insp.focus'),
-            onClick: () => graph.focus(node.id),
+            onTap: () => graph.focus(node.id),
         }),
     ]));
 
@@ -537,7 +600,7 @@ function renderNodeInspector(node) {
     inspector.appendChild(el('button.mlg-btn.mlg-btn--danger', {
         type: 'button',
         text: t('insp.remove'),
-        onClick: () => confirmDialog(t('confirm.deleteNode', { name: node.name }), () => {
+        onTap: () => confirmDialog(t('confirm.deleteNode', { name: node.name }), () => {
             model.removeNode(node.id);
             selection = null;
             graph.select(null, false);
@@ -555,26 +618,33 @@ function bondRow(edge, fromId) {
         ? t('insp.mutual')
         : ((edge.dir === 'a2b') === (edge.a === fromId) ? t('insp.oneWayOut') : t('insp.oneWayIn'));
 
-    return el('div.mlg-bond', { style: { '--mlg-accent': meta.color } }, [
+    const stage = model.stageOf(edge);
+    const growing = edge.origin === 'story' && model.edgeProgress(edge) < 100;
+
+    return el('div.mlg-bond', { style: { '--mlg-accent': meta.color }, 'data-stage': stage }, [
         other ? avatarChip(other, 30) : el('span.mlg-avatar', {}, [el('span.mlg-avatar-initials', { text: '?' })]),
         el('div.mlg-bond-main', {}, [
             el('div.mlg-bond-top', {}, [
                 el('span.mlg-bond-name', { text: other?.name || '?' }),
+                growing ? el('span.mlg-stage-chip', { 'data-stage': stage, text: t('stage.' + stage) }) : null,
                 el('span.mlg-bond-glyph', { text: meta.glyph }),
             ]),
             el('div.mlg-bond-meta', { text: `${t('rel.' + edge.type + '.short')} · ${outgoing}${edge.note ? ' · ' + edge.note : ''}` }),
-            el('span.mlg-bond-bar', {}, [el('i', { style: { width: (edge.strength || 50) + '%' } })]),
+            el('span.mlg-bond-bar', { 'data-growing': String(growing) }, [
+                el('i', { style: { width: (edge.strength || 50) + '%' } }),
+                growing ? el('u', { style: { width: Math.round(model.edgeProgress(edge)) + '%' } }) : null,
+            ]),
         ]),
         el('div.mlg-bond-actions', {}, [
             el('button.mlg-icon-btn.mlg-icon-btn--sm', {
                 type: 'button',
                 title: t('insp.edit'),
-                onClick: () => openEdgeEditor({ edge }),
+                onTap: () => openEdgeEditor({ edge }),
             }, [icon('pencil', 15)]),
             el('button.mlg-icon-btn.mlg-icon-btn--sm', {
                 type: 'button',
                 title: t('common.delete'),
-                onClick: () => confirmDialog(t('confirm.deleteEdge'), () => {
+                onTap: () => confirmDialog(t('confirm.deleteEdge'), () => {
                     model.removeEdge(edge.id);
                     syncGraph();
                 }),
@@ -595,14 +665,36 @@ function renderEdgeInspector(edge) {
         b ? avatarChip(b, 42) : null,
     ]));
 
+    const progress = model.edgeProgress(edge);
+    const stage = model.stageOf(edge);
+
     inspector.appendChild(el('div.mlg-insp-id', {}, [
         el('h3.mlg-insp-name', { text: `${a?.name || '?'} — ${b?.name || '?'}` }),
         el('div.mlg-insp-tags', {}, [
             el('span.mlg-tag', { style: { '--mlg-accent': meta.color }, text: t('rel.' + edge.type) }),
             el('span.mlg-tag.mlg-tag--soft', { text: t('edge.dir.' + edge.dir) }),
             el('span.mlg-tag.mlg-tag--soft', { text: `${t('edge.strength')}: ${edge.strength}` }),
+            edge.origin === 'story'
+                ? el('span.mlg-tag.mlg-tag--story', { text: t('stage.' + stage) })
+                : null,
+            edge.locked ? el('span.mlg-tag.mlg-tag--soft', { text: t('edge.locked') }) : null,
         ]),
     ]));
+
+    if (edge.origin === 'story') {
+        inspector.appendChild(el('div.mlg-growth', {}, [
+            el('div.mlg-growth-head', {}, [
+                el('span', { text: t('edge.growth') }),
+                el('span.mlg-growth-value', { text: Math.round(progress) + '%' }),
+            ]),
+            el('span.mlg-growth-bar', {}, [el('i', { style: { width: Math.round(progress) + '%', '--mlg-accent': meta.color } })]),
+            el('p.mlg-growth-note', {
+                text: typeof edge.since === 'number'
+                    ? t('edge.sinceMsg', { n: edge.since + 1, hits: edge.hits || 1 })
+                    : t('edge.fromStory'),
+            }),
+        ]));
+    }
 
     if (edge.note) inspector.appendChild(el('p.mlg-insp-note', { text: edge.note }));
 
@@ -610,19 +702,30 @@ function renderEdgeInspector(edge) {
         el('button.mlg-btn.mlg-btn--primary', {
             type: 'button',
             text: t('insp.edit'),
-            onClick: () => openEdgeEditor({ edge }),
+            onTap: () => openEdgeEditor({ edge }),
         }),
+        edge.locked && edge.origin === 'story'
+            ? el('button.mlg-btn.mlg-btn--ghost', {
+                type: 'button',
+                text: t('edge.unlock'),
+                onTap: () => {
+                    edge.locked = false;
+                    save();
+                    renderInspector();
+                },
+            })
+            : null,
         el('button.mlg-btn.mlg-btn--danger', {
             type: 'button',
             text: t('common.delete'),
-            onClick: () => confirmDialog(t('confirm.deleteEdge'), () => {
+            onTap: () => confirmDialog(t('confirm.deleteEdge'), () => {
                 model.removeEdge(edge.id);
                 selection = null;
                 graph.select(null, false);
                 syncGraph();
             }),
         }),
-    ]));
+    ].filter(Boolean)));
 }
 
 /* ------------------------------------------------------------------ search */
@@ -645,7 +748,7 @@ function renderSearch(keepHidden = false) {
     for (const node of matches) {
         searchResults.appendChild(el('button.mlg-search-row', {
             type: 'button',
-            onClick: () => {
+            onTap: () => {
                 selection = { type: 'node', id: node.id };
                 graph.select(selection, false);
                 graph.focus(node.id);
@@ -666,19 +769,34 @@ function renderSearch(keepHidden = false) {
 /* ------------------------------------------------------------------- menus */
 
 function closeMenu() {
-    if (openMenuEl) {
-        openMenuEl.remove();
-        openMenuEl = null;
-    }
+    if (!openMenuEl) return;
+    openMenuEl.backdrop?.remove();
+    openMenuEl.remove();
+    openMenuEl = null;
+}
+
+/**
+ * True when menus should be bottom sheets rather than popovers: a phone, or any
+ * touch screen narrow enough that a popover would be a thumb-sized lottery.
+ */
+function compactMenus() {
+    const rect = viewportRect();
+    return rect.width < MOBILE_MENU_WIDTH || (isTouchDevice() && rect.width < 900);
 }
 
 /**
  * Opens a popover next to an anchor. On narrow screens it becomes a bottom
  * sheet, which is far easier to hit with a thumb.
+ *
+ * Both flavours are positioned inside the menu layer, which the overlay keeps
+ * aligned with the *visible* viewport - the part of the screen left over after
+ * the browser chrome and the on-screen keyboard have taken their share. A sheet
+ * pinned to the layout viewport instead would slide out of sight on a phone,
+ * which is what used to make these menus look like they never opened.
  */
 function openMenu(anchor, items) {
     closeMenu();
-    const compact = window.innerWidth < MOBILE_MENU_WIDTH;
+    const compact = compactMenus();
     const menu = el('div.mlg-menu' + (compact ? '.mlg-menu--sheet' : ''), { role: 'menu' });
     menu.anchor = anchor;
 
@@ -692,17 +810,28 @@ function openMenu(anchor, items) {
             menu.appendChild(el('div.mlg-menu-sep'));
             continue;
         }
+        if (item.type === 'note') {
+            menu.appendChild(el('div.mlg-menu-note', { text: item.label }));
+            continue;
+        }
         const row = el('button.mlg-menu-item', {
             type: 'button',
             role: 'menuitem',
             'data-checked': item.checked === undefined ? '' : String(!!item.checked),
-            onClick: () => {
+            'data-tone': item.tone || '',
+            disabled: !!item.disabled,
+            // The tap that opened this menu is still travelling: ignore the
+            // click it leaves behind so a sheet never dismisses itself. Short
+            // enough that a real thumb is never turned away.
+            tapGuard: 200,
+            onTap: () => {
+                if (item.disabled) return;
                 if (item.keepOpen) {
-                    item.onClick?.();
+                    item.run?.();
                     return;
                 }
                 closeMenu();
-                item.onClick?.();
+                item.run?.();
             },
         }, [
             item.icon ? icon(item.icon, 16) : el('span.mlg-menu-spacer'),
@@ -713,25 +842,48 @@ function openMenu(anchor, items) {
         menu.appendChild(row);
     }
 
+    // A sheet gets a real backdrop: on a touch screen the "tap outside to
+    // dismiss" has to work even when the host swallows document-level events.
+    if (compact) {
+        const backdrop = el('div.mlg-menu-backdrop', { tapGuard: 200, onTap: () => closeMenu() });
+        menuLayer.appendChild(backdrop);
+        menu.backdrop = backdrop;
+    }
+
     menuLayer.appendChild(menu);
     openMenuEl = menu;
 
-    if (!compact) {
-        const rect = anchor.getBoundingClientRect();
-        const width = menu.offsetWidth;
-        const left = Math.min(Math.max(8, rect.left + rect.width / 2 - width / 2), window.innerWidth - width - 8);
-        const top = Math.min(rect.bottom + 8, window.innerHeight - menu.offsetHeight - 8);
-        menu.style.left = Math.round(left) + 'px';
-        menu.style.top = Math.round(Math.max(8, top)) + 'px';
-    }
+    if (!compact) placeMenu(menu, anchor);
     requestAnimationFrame(() => menu.classList.add('mlg-menu--in'));
+    return menu;
+}
+
+/** Puts a popover under its anchor, kept fully inside the visible window. */
+function placeMenu(menu, anchor) {
+    const layer = menuLayer.getBoundingClientRect();
+    const rect = anchor.getBoundingClientRect();
+    const width = menu.offsetWidth;
+    const height = menu.offsetHeight;
+
+    let left = rect.left + rect.width / 2 - width / 2 - layer.left;
+    left = Math.min(Math.max(8, left), Math.max(8, layer.width - width - 8));
+
+    let top = rect.bottom + 8 - layer.top;
+    if (top + height > layer.height - 8) {
+        // No room below: try above the anchor, then simply fit it in.
+        const above = rect.top - 8 - height - layer.top;
+        top = above >= 8 ? above : Math.max(8, layer.height - height - 8);
+    }
+
+    menu.style.left = Math.round(left) + 'px';
+    menu.style.top = Math.round(top) + 'px';
 }
 
 function openAddMenu(anchor) {
     openMenu(anchor, [
-        { icon: 'plus', label: t('tb.addNpc'), onClick: () => openNodeEditor(null) },
-        { icon: 'group', label: t('tb.addGroup'), onClick: () => openGroupPicker() },
-        { icon: 'sync', label: t('tb.sync'), onClick: () => doSync() },
+        { icon: 'plus', label: t('tb.addNpc'), run: () => openNodeEditor(null) },
+        { icon: 'group', label: t('tb.addGroup'), run: () => openGroupPicker() },
+        { icon: 'sync', label: t('tb.sync'), run: () => doSync() },
     ]);
 }
 
@@ -742,7 +894,7 @@ function openFilterMenu(anchor) {
         checked: settings.filters[type] !== false,
         swatch: model.REL_META[type].color,
         keepOpen: true,
-        onClick: () => {
+        run: () => {
             settings.filters[type] = settings.filters[type] === false;
             save();
             syncGraph();
@@ -754,7 +906,7 @@ function openFilterMenu(anchor) {
         label: t(labelKey),
         checked: target[key] !== false,
         keepOpen: true,
-        onClick: () => {
+        run: () => {
             target[key] = target[key] === false;
             save();
             syncGraph();
@@ -774,14 +926,95 @@ function openFilterMenu(anchor) {
 
 function openDataMenu(anchor) {
     openMenu(anchor, [
-        { icon: 'data', label: t('data.export'), onClick: () => exportFile() },
-        { icon: 'data', label: t('data.import'), onClick: () => importFile() },
+        { icon: 'data', label: t('data.export'), run: () => exportFile() },
+        { icon: 'data', label: t('data.import'), run: () => importFile() },
         { type: 'separator' },
         {
             icon: 'trash',
             label: t('data.clear'),
-            onClick: () => confirmDialog(t('confirm.clear'), () => {
+            run: () => confirmDialog(t('confirm.clear'), () => {
                 model.clearGraph();
+                selection = null;
+                graph.select(null, false);
+                syncGraph();
+            }),
+        },
+    ]);
+}
+
+/** The chronicle menu: how the story writes itself onto the board. */
+function openStoryMenu(anchor) {
+    const settings = getSettings();
+    const story = settings.story;
+    const state = chronicle.status();
+
+    const flag = (key, labelKey) => ({
+        label: t(labelKey),
+        checked: story[key] !== false,
+        keepOpen: true,
+        run: () => {
+            story[key] = story[key] === false;
+            save();
+            syncGraph();
+            openStoryMenu(anchor);
+        },
+    });
+
+    const paceItem = (value, labelKey) => ({
+        label: t(labelKey),
+        checked: story.pace === value,
+        keepOpen: true,
+        run: () => {
+            story.pace = value;
+            save();
+            openStoryMenu(anchor);
+        },
+    });
+
+    openMenu(anchor, [
+        { type: 'title', label: t('story.title') },
+        {
+            label: t('story.mode'),
+            checked: !!story.enabled,
+            keepOpen: true,
+            run: () => {
+                story.enabled = !story.enabled;
+                save();
+                if (story.enabled) chronicle.advance();
+                syncGraph();
+                openStoryMenu(anchor);
+            },
+        },
+        { type: 'note', label: t('story.read', { read: state.applied, total: state.total, chapter: state.chapter }) },
+        { type: 'separator' },
+        flag('cast', 'story.cast'),
+        flag('mentions', 'story.mentions'),
+        flag('fade', 'story.fade'),
+        { type: 'separator' },
+        { type: 'title', label: t('story.pace') },
+        paceItem('gentle', 'story.pace.gentle'),
+        paceItem('normal', 'story.pace.normal'),
+        paceItem('fast', 'story.pace.fast'),
+        { type: 'separator' },
+        {
+            icon: 'rewind',
+            label: t('story.rebuild'),
+            disabled: state.busy,
+            run: () => {
+                showToast(t('story.rebuilding'));
+                chronicle.rebuild(result => {
+                    syncGraph();
+                    graph?.relayout();
+                    showToast(t('story.rebuilt', { bonds: result.revealed, souls: result.added }));
+                });
+            },
+        },
+        {
+            icon: 'trash',
+            label: t('story.forget'),
+            tone: 'danger',
+            run: () => confirmDialog(t('confirm.forget'), () => {
+                chronicle.forget();
                 selection = null;
                 graph.select(null, false);
                 syncGraph();
@@ -794,7 +1027,7 @@ function openLanguageMenu(anchor) {
     openMenu(anchor, LANGUAGES.map(lang => ({
         label: lang.label,
         checked: getLanguage() === lang.id,
-        onClick: () => {
+        run: () => {
             getSettings().lang = lang.id;
             setLanguage(lang.id);
             save();
@@ -812,7 +1045,7 @@ function openGroupPicker() {
     for (const group of list) {
         body.appendChild(el('button.mlg-list-row', {
             type: 'button',
-            onClick: () => {
+            onTap: () => {
                 const added = model.importGroup(group.id);
                 closeModal();
                 syncGraph();
@@ -837,7 +1070,7 @@ function openModal({ title, body, actions = [], wide = false }) {
             el('button.mlg-icon-btn', {
                 type: 'button',
                 title: t('common.close'),
-                onClick: () => closeModal(),
+                onTap: () => closeModal(),
             }, [icon('close', 16)]),
         ]),
         el('div.mlg-modal-body', {}, [body]),
@@ -864,11 +1097,11 @@ function confirmDialog(message, onConfirm) {
         title: 'MyLove Graph',
         body,
         actions: [
-            el('button.mlg-btn.mlg-btn--ghost', { type: 'button', text: t('common.cancel'), onClick: () => closeModal() }),
+            el('button.mlg-btn.mlg-btn--ghost', { type: 'button', text: t('common.cancel'), onTap: () => closeModal() }),
             el('button.mlg-btn.mlg-btn--danger', {
                 type: 'button',
                 text: t('common.ok'),
-                onClick: () => {
+                onTap: () => {
                     closeModal();
                     onConfirm();
                 },
@@ -907,6 +1140,7 @@ function openNodeEditor(node) {
         disabled: locked,
     });
     const roleInput = el('input.mlg-input', { type: 'text', value: draft.role || '', placeholder: t('node.rolePh') });
+    const aliasInput = el('input.mlg-input', { type: 'text', value: draft.aliases || '', placeholder: t('node.aliasesPh') });
     const noteInput = el('textarea.mlg-input.mlg-textarea', { rows: 3, placeholder: t('node.notePh') });
     noteInput.value = draft.note || '';
     const avatarInput = el('input.mlg-input', { type: 'url', value: draft.avatarUrl || '', placeholder: t('node.avatarPh') });
@@ -923,7 +1157,7 @@ function openNodeEditor(node) {
         'data-color': '',
         title: t('common.reset'),
         class: 'mlg-swatch mlg-swatch--auto',
-        onClick: () => {
+        onTap: () => {
             color = '';
             paint();
         },
@@ -933,7 +1167,7 @@ function openNodeEditor(node) {
             type: 'button',
             'data-color': value,
             style: { '--mlg-swatch': value },
-            onClick: () => {
+            onTap: () => {
                 color = value;
                 paint();
             },
@@ -946,6 +1180,7 @@ function openNodeEditor(node) {
     const body = el('div.mlg-form', {}, [
         field('node.name', nameInput, locked ? t('node.lockedHint') : ''),
         field('node.role', roleInput),
+        field('node.aliases', aliasInput, t('node.aliasesHint')),
         field('node.color', swatches),
         field('node.avatar', avatarInput),
         field('node.note', noteInput),
@@ -960,7 +1195,7 @@ function openNodeEditor(node) {
                 ? el('button.mlg-btn.mlg-btn--danger', {
                     type: 'button',
                     text: t('common.delete'),
-                    onClick: () => {
+                    onTap: () => {
                         closeModal();
                         confirmDialog(t('confirm.deleteNode', { name: draft.name }), () => {
                             model.removeNode(draft.id);
@@ -971,11 +1206,11 @@ function openNodeEditor(node) {
                     },
                 })
                 : null,
-            el('button.mlg-btn.mlg-btn--ghost', { type: 'button', text: t('common.cancel'), onClick: () => closeModal() }),
+            el('button.mlg-btn.mlg-btn--ghost', { type: 'button', text: t('common.cancel'), onTap: () => closeModal() }),
             el('button.mlg-btn.mlg-btn--primary', {
                 type: 'button',
                 text: t('common.save'),
-                onClick: () => {
+                onTap: () => {
                     const name = nameInput.value.trim();
                     if (!locked && !name) {
                         error.hidden = false;
@@ -985,6 +1220,7 @@ function openNodeEditor(node) {
                     const patch = {
                         name: locked ? draft.name : name,
                         role: roleInput.value.trim(),
+                        aliases: aliasInput.value.trim(),
                         note: noteInput.value.trim(),
                         avatarUrl: avatarInput.value.trim(),
                         color,
@@ -1057,7 +1293,7 @@ function openEdgeEditor({ edge = null, a = null } = {}) {
             type: 'button',
             'data-active': String(type === value),
             style: { '--mlg-accent': meta.color },
-            onClick: e => {
+            onTap: e => {
                 type = value;
                 typeRow.querySelectorAll('button').forEach(b => (b.dataset.active = 'false'));
                 e.currentTarget.dataset.active = 'true';
@@ -1087,7 +1323,7 @@ function openEdgeEditor({ edge = null, a = null } = {}) {
             type: 'button',
             'data-active': String(dir === value),
             text: t('edge.dir.' + value),
-            onClick: e => {
+            onTap: e => {
                 dir = value;
                 dirRow.querySelectorAll('button').forEach(b => (b.dataset.active = 'false'));
                 e.currentTarget.dataset.active = 'true';
@@ -1119,7 +1355,7 @@ function openEdgeEditor({ edge = null, a = null } = {}) {
                 ? el('button.mlg-btn.mlg-btn--danger', {
                     type: 'button',
                     text: t('common.delete'),
-                    onClick: () => {
+                    onTap: () => {
                         closeModal();
                         confirmDialog(t('confirm.deleteEdge'), () => {
                             model.removeEdge(edge.id);
@@ -1130,11 +1366,11 @@ function openEdgeEditor({ edge = null, a = null } = {}) {
                     },
                 })
                 : null,
-            el('button.mlg-btn.mlg-btn--ghost', { type: 'button', text: t('common.cancel'), onClick: () => closeModal() }),
+            el('button.mlg-btn.mlg-btn--ghost', { type: 'button', text: t('common.cancel'), onTap: () => closeModal() }),
             el('button.mlg-btn.mlg-btn--primary', {
                 type: 'button',
                 text: t('common.save'),
-                onClick: () => {
+                onTap: () => {
                     const from = isNew ? fromSelect.value : edge.a;
                     const to = isNew ? toSelect.value : edge.b;
                     if (from === to) {
@@ -1155,6 +1391,8 @@ function openEdgeEditor({ edge = null, a = null } = {}) {
                         strength: Number(strength.value),
                         dir,
                         note: noteInput.value.trim(),
+                        // Touched by hand: the chronicle stops steering it.
+                        locked: true,
                     });
                     closeModal();
                     syncGraph();

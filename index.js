@@ -7,10 +7,12 @@
  */
 
 import { setHost, on as onStEvent } from './src/host.js';
-import { initState, getSettings, save, onStateChange } from './src/state.js';
+import { initState, getSettings, save, onStateChange, storyEnabled } from './src/state.js';
 import { setLanguage } from './src/i18n.js';
 import { el, icon } from './src/dom.js';
+import { initViewport } from './src/viewport.js';
 import * as model from './src/model.js';
+import * as chronicle from './src/chronicle.js';
 import * as panel from './src/panel.js';
 import { createFab, updateFab, setFabVisible } from './src/fab.js';
 import { mountSettings, refreshSettings } from './src/settingsUi.js';
@@ -83,7 +85,9 @@ function mountWandItem() {
         id: 'mlg_wand_item',
         tabindex: '0',
         title: 'MyLove Graph',
-        onClick: () => {
+        // onTap, not onClick: on phones the host can swallow the touch sequence
+        // before a click is ever synthesised.
+        onTap: () => {
             // Close the wand popup the way ST's own entries do.
             menu.style.display = 'none';
             openGraph();
@@ -167,7 +171,10 @@ function scheduleAutoSync() {
     clearTimeout(syncTimer);
     syncTimer = setTimeout(() => {
         try {
-            model.syncCharacters();
+            // In story mode with "only souls the story met" on, the cast walks
+            // in on its own and a refresh just keeps the board current.
+            const story = getSettings().story;
+            model.syncCharacters({ addNew: !storyEnabled() || !story.cast });
             if (panel.isOpen()) panel.refresh();
             refreshSettings();
         } catch (err) {
@@ -176,12 +183,40 @@ function scheduleAutoSync() {
     }, 800);
 }
 
+/* --------------------------------------------------------------- chronicle */
+
+/** Wires the story reader to whatever message events this ST build exposes. */
+function bindChronicle() {
+    const tick = () => chronicle.schedule();
+    for (const eventName of [
+        'MESSAGE_RECEIVED',
+        'MESSAGE_SENT',
+        'CHARACTER_MESSAGE_RENDERED',
+        'USER_MESSAGE_RENDERED',
+        'MESSAGE_EDITED',
+        'MESSAGE_DELETED',
+        'MESSAGE_SWIPED',
+        'GENERATION_ENDED',
+    ]) {
+        onStEvent(eventName, tick);
+    }
+    // A new chat is a new story: read it from its first line.
+    onStEvent('CHAT_CHANGED', () => chronicle.schedule(900));
+
+    chronicle.onChronicle(result => {
+        if (!result) return;
+        if (panel.isOpen()) panel.refresh();
+        refreshSettings();
+    });
+}
+
 /* ------------------------------------------------------------------ boot */
 
 async function boot() {
     const bridge = await connectHost();
     initState(bridge);
     setLanguage(getSettings().lang);
+    initViewport();
 
     createFab(toggleGraph);
     updateFab();
@@ -199,7 +234,11 @@ async function boot() {
     onStEvent('APP_READY', () => {
         mountWandItem();
         scheduleAutoSync();
+        chronicle.schedule(1200);
     });
+    bindChronicle();
+    // The chat may already be loaded when a build has no APP_READY event.
+    chronicle.schedule(1500);
 
     try {
         const context = (window.SillyTavern?.getContext?.()) || null;
@@ -221,6 +260,13 @@ async function boot() {
         export: () => model.exportGraph(),
         settings: getSettings,
         save,
+        // The chronicle, for anyone who wants to drive it from a script.
+        story: {
+            read: () => chronicle.advance(),
+            rebuild: done => chronicle.rebuild(done),
+            forget: () => chronicle.forget(),
+            status: () => chronicle.status(),
+        },
     };
 
     console.log(LOG, 'ready');
