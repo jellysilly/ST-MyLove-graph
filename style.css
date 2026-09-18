@@ -632,13 +632,28 @@
 
 .mlg-empty {
     position: absolute;
-    inset: 0;
+    top: 0;
+    right: 0;
+    left: 0;
+    /* Full height by default; where the HUD is showing, the stage says so and
+       the rule below hands that strip of the board back to it. Reserving the
+       room beats overlapping it - and leaves its progress strips tappable. */
+    height: 100%;
     display: grid;
     place-content: center;
     gap: 6px;
     padding: 24px;
+    overflow-y: auto;
+    overscroll-behavior: contain;
     text-align: center;
 }
+
+.mlg-stage[data-hud="slim"] .mlg-empty { height: calc(100% - 148px); }
+
+/* An empty board has no bonds, so the legend has nothing to explain - and the
+   empty state needs the top of the stage more than a colour key does. */
+.mlg-stage[data-hud="slim"] .mlg-legend,
+.mlg-stage[data-hud="none"] .mlg-legend { display: none; }
 
 .mlg-empty[hidden] { display: none; }
 
@@ -1393,6 +1408,13 @@
     border-top: 1px dashed var(--mlg-line);
 }
 
+/* Trimmed to the strips alone, the first one has nothing to be divided from. */
+.mlg-basis[data-slim="true"] .mlg-chronicle:first-child {
+    margin-top: 0;
+    padding-top: 0;
+    border-top: 0;
+}
+
 .mlg-chronicle-head {
     display: flex;
     gap: 8px;
@@ -1615,6 +1637,18 @@
     .mlg-basis-foot { font-size: 8px; }
     .mlg-title { font-size: 24px; }
     .mlg-insp-name { font-size: 21px; }
+}
+
+/* Short screens: the empty state carries a heart, a heading, a paragraph and up
+   to three buttons, which is more than a phone in portrait can spare at full
+   size. */
+@media (max-height: 720px) {
+    .mlg-empty { padding: 14px 18px; gap: 4px; }
+    .mlg-empty-heart .mlg-icon { width: 34px; height: 34px; }
+    .mlg-empty h3 { font-size: 21px; }
+    .mlg-empty p { margin-bottom: 6px; font-size: 12px; line-height: 1.45; }
+    .mlg-empty .mlg-btn { padding: 8px 14px; font-size: 12px; }
+    .mlg-stage[data-hud="slim"] .mlg-empty { height: calc(100% - 136px); }
 }
 
 /* Very short screens: the meters would eat the board, so fold them away. */

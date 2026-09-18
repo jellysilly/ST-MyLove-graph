@@ -392,6 +392,24 @@ function renderBasis() {
 
     const nodes = model.nodes();
     const edges = model.edges();
+
+    // Nothing on the board yet: the meters would all read zero and there is
+    // nobody to pick, so the panel keeps only what still means something - how
+    // far each engine has read - and steps aside entirely when neither has
+    // anything to say. The empty state needs that room for its own text.
+    if (!nodes.length) {
+        renderChronicle();
+        renderDirectorStrip();
+        const bare = !basis.childElementCount;
+        basis.hidden = bare;
+        basis.dataset.slim = String(!bare);
+        if (stage) stage.dataset.hud = bare ? 'none' : 'slim';
+        return;
+    }
+    basis.hidden = false;
+    basis.dataset.slim = 'false';
+    if (stage) stage.dataset.hud = 'full';
+
     let title = t('hud.pick');
     let metrics = { affection: 0, devotion: 0, tension: 0 };
 
