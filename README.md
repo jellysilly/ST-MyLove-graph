@@ -1,6 +1,6 @@
 # MyLove Graph
 
-**A visual map of the bonds between every character and NPC in SillyTavern.**
+**A visual map of the bonds between every character and you in SillyTavern.**
 
 > *"Love's a game, wanna play?"*
 
