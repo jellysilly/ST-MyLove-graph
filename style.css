@@ -641,6 +641,10 @@
     height: 100%;
     display: grid;
     place-content: center;
+    /* Every line centres on the board, not on the widest thing in the column:
+       the paragraph is capped at 34ch and would otherwise sit against the left
+       edge of a column as wide as the row of buttons. */
+    justify-items: center;
     gap: 6px;
     padding: 24px;
     overflow-y: auto;
@@ -648,7 +652,9 @@
     text-align: center;
 }
 
-.mlg-stage[data-hud="slim"] .mlg-empty { height: calc(100% - 148px); }
+/* The stage measures the panel and sets --mlg-hud-space; the fallback only
+   has to hold until the first render. */
+.mlg-stage[data-hud="slim"] .mlg-empty { height: calc(100% - var(--mlg-hud-space, 148px)); }
 
 /* An empty board has no bonds, so the legend has nothing to explain - and the
    empty state needs the top of the stage more than a colour key does. */
@@ -658,7 +664,6 @@
 .mlg-empty[hidden] { display: none; }
 
 .mlg-empty-heart {
-    justify-self: center;
     color: var(--mlg-pink);
     filter: drop-shadow(0 0 18px rgba(255, 45, 120, 0.65));
     animation: mlg-breathe 3.6s ease-in-out infinite;
@@ -666,7 +671,6 @@
 
 .mlg-empty h3 { margin: 6px 0 0; font-family: var(--mlg-script); font-size: 26px; font-weight: 400; }
 .mlg-empty p { margin: 0 0 10px; max-width: 34ch; font-size: 13px; color: var(--mlg-dim); }
-.mlg-empty .mlg-btn { justify-self: center; }
 
 /* -------------------------------------------------------------- inspector */
 
@@ -1648,7 +1652,7 @@
     .mlg-empty h3 { font-size: 21px; }
     .mlg-empty p { margin-bottom: 6px; font-size: 12px; line-height: 1.45; }
     .mlg-empty .mlg-btn { padding: 8px 14px; font-size: 12px; }
-    .mlg-stage[data-hud="slim"] .mlg-empty { height: calc(100% - 136px); }
+    .mlg-stage[data-hud="slim"] .mlg-empty { height: calc(100% - var(--mlg-hud-space, 136px)); }
 }
 
 /* Very short screens: the meters would eat the board, so fold them away. */

@@ -165,7 +165,10 @@ function build() {
         onPositions: () => model.persistPositions(),
     });
 
-    observer = new ResizeObserver(() => graph?.resize());
+    observer = new ResizeObserver(() => {
+        graph?.resize();
+        measureHud();
+    });
     observer.observe(stage);
 
     document.addEventListener('keydown', onKeyDown);
@@ -339,9 +342,36 @@ function renderAll() {
     renderBasis();
     renderInspector();
     renderEmpty();
+    measureHud();
     // Only refresh the search dropdown when it is already open, so redraws
     // never make it pop up on their own.
     if (searchResults && !searchResults.hidden) renderSearch();
+}
+
+/**
+ * Tells the stage how much room the HUD panel is taking at the bottom.
+ *
+ * The empty state centres itself in whatever is left, and how much that is
+ * depends on which engines are switched on - one progress strip or two. Guessed
+ * from a stylesheet it is always a little wrong, and the invitation ends up
+ * sitting above the middle of the board; measured, it lands in the centre of
+ * the space it actually has.
+ */
+function measureHud() {
+    if (!stage) return;
+    if (stage.dataset.hud !== 'slim' || !basis || basis.hidden) {
+        stage.style.removeProperty('--mlg-hud-space');
+        return;
+    }
+    const stageBox = stage.getBoundingClientRect();
+    const basisBox = basis.getBoundingClientRect();
+    // The panel plus the gap it keeps below itself.
+    const space = Math.round(stageBox.bottom - basisBox.top);
+    if (space > 0 && space < stageBox.height) {
+        stage.style.setProperty('--mlg-hud-space', space + 'px');
+    } else {
+        stage.style.removeProperty('--mlg-hud-space');
+    }
 }
 
 /* ------------------------------------------------------------------ legend */
