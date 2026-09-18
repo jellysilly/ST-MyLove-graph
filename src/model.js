@@ -112,6 +112,15 @@ export function createNode(patch = {}) {
         // matches these too, which is what lets a card named "Aria" be found in
         // a scene that only ever writes "Ария".
         aliases: typeof patch.aliases === 'string' ? patch.aliases : '',
+        // What the director wrote about them: a short read on who they are, the
+        // tags it hangs on them, and the long dossier when one was asked for.
+        // `note` stays the user's own field and is never painted over.
+        bio: typeof patch.bio === 'string' ? patch.bio : '',
+        traits: Array.isArray(patch.traits) ? patch.traits.slice(0, 8).map(String) : [],
+        dossier: patch.dossier && typeof patch.dossier === 'object' ? patch.dossier : null,
+        // Set the moment the user saves this soul by hand. From then on the
+        // director fills in blanks only.
+        edited: !!patch.edited,
         avatar: patch.avatar || null,
         avatarUrl: patch.avatarUrl || '',
         color: patch.color || '',
@@ -123,15 +132,21 @@ export function createNode(patch = {}) {
         // first brought them on stage.
         origin: patch.origin || 'manual',
         seen: typeof patch.seen === 'number' ? patch.seen : null,
+        /** The message the director last read them in. */
+        lastAi: typeof patch.lastAi === 'number' ? patch.lastAi : null,
         born: typeof patch.born === 'number' ? patch.born : Date.now(),
     };
     return node;
 }
 
-export function addNode(patch) {
+/**
+ * @param {object} patch
+ * @param {boolean} [quiet] skip the save - for batches that save once at the end
+ */
+export function addNode(patch, quiet = false) {
     const node = createNode(patch);
     nodes().push(node);
-    save();
+    if (!quiet) save();
     return node;
 }
 
@@ -169,11 +184,11 @@ export function edgesOf(id) {
     return edges().filter(e => e.a === id || e.b === id);
 }
 
-export function upsertEdge(patch) {
+export function upsertEdge(patch, quiet = false) {
     const existing = patch.id ? edges().find(e => e.id === patch.id) : findEdge(patch.a, patch.b);
     if (existing) {
         if (patch.locked) {
-            // Hand-edited: the chronicle stops steering this one.
+            // Hand-edited: the chronicle and the director stop steering this one.
             existing.locked = true;
             existing.progress = 100;
         }
@@ -185,7 +200,16 @@ export function upsertEdge(patch) {
             dir: ['both', 'a2b', 'b2a'].includes(patch.dir) ? patch.dir : existing.dir,
             note: patch.note ?? existing.note,
         });
-        save();
+        // The director hands over more than the editor does: where it took a
+        // bond over, that bond stops being a word-count guess.
+        if (patch.origin && !existing.locked) existing.origin = patch.origin;
+        if (typeof patch.progress === 'number') existing.progress = clamp(patch.progress, 0, 100);
+        if (typeof patch.hits === 'number') existing.hits = patch.hits;
+        if (typeof patch.lastAt === 'number') existing.lastAt = patch.lastAt;
+        if (typeof patch.since === 'number' && existing.since === null) existing.since = patch.since;
+        if (typeof patch.confidence === 'number') existing.confidence = patch.confidence;
+        if (patch.votes) existing.votes = patch.votes;
+        if (!quiet) save();
         return existing;
     }
     const edge = {
@@ -205,10 +229,12 @@ export function upsertEdge(patch) {
         hits: typeof patch.hits === 'number' ? patch.hits : 0,
         since: typeof patch.since === 'number' ? patch.since : null,
         lastAt: typeof patch.lastAt === 'number' ? patch.lastAt : null,
+        /** How sure the director was, when a director drew this one. */
+        confidence: typeof patch.confidence === 'number' ? patch.confidence : null,
         born: Date.now(),
     };
     edges().push(edge);
-    save();
+    if (!quiet) save();
     return edge;
 }
 
@@ -226,7 +252,7 @@ export function removeEdge(id) {
 /** How far along a bond is, 0-100. Anything hand-made counts as complete. */
 export function edgeProgress(edge) {
     if (!edge) return 0;
-    if (edge.origin !== 'story') return 100;
+    if (edge.origin !== 'story' && edge.origin !== 'ai') return 100;
     return clamp(typeof edge.progress === 'number' ? edge.progress : 100, 0, 100);
 }
 
@@ -435,7 +461,7 @@ export function importGraph(payload) {
             strength: clamp(Number(e.strength) || 50, 1, 100),
             dir: ['both', 'a2b', 'b2a'].includes(e.dir) ? e.dir : 'both',
             note: typeof e.note === 'string' ? e.note : '',
-            origin: e.origin === 'story' ? 'story' : 'manual',
+            origin: ['story', 'ai'].includes(e.origin) ? e.origin : 'manual',
             // Graphs exported before story mode have no progress: they are
             // finished bonds, so they come back in whole.
             progress: typeof e.progress === 'number' ? clamp(e.progress, 0, 100) : 100,
@@ -444,6 +470,7 @@ export function importGraph(payload) {
             hits: typeof e.hits === 'number' ? e.hits : 0,
             since: typeof e.since === 'number' ? e.since : null,
             lastAt: typeof e.lastAt === 'number' ? e.lastAt : null,
+            confidence: typeof e.confidence === 'number' ? e.confidence : null,
             born: Date.now(),
         }));
 
