@@ -13,6 +13,17 @@ appears on the board the first time they walk into a scene, and the bonds
 between them start as faint sparks that grow, change colour and settle as the
 story goes on.
 
+Two engines fill it in, and you can run either or both:
+
+- the **chronicle**, which counts words in the chat and never leaves your
+  browser;
+- the **director**, which hands the new scenes to a language model and lets it
+  write the cast itself — who walked in, what they are like, and what is going
+  on between them. It can run on **a second connection profile**, so a small
+  fast model keeps the map while your good model keeps telling the story.
+
+Every chat gets its own board, so one story's cast never wanders into another.
+
 [Русская версия](README.ru.md)
 
 ---
@@ -32,6 +43,22 @@ story goes on.
   through decides the kind of bond, so a friendship that turns romantic becomes
   a romance on the board too, and a pair nobody writes about any more slowly
   cools off.
+- **The director** — the same job done by a model instead of a word counter:
+
+  | It writes | From |
+  | --- | --- |
+  | new souls, with a role and a short profile | whoever actually walks into the scenes |
+  | bonds, with a type, a strength and a label | what the scenes say about the pair |
+  | a story log | what changed, scene by scene |
+  | a full dossier on demand | appearance, character, what they want, what they hide |
+
+  It reads every few messages, never while SillyTavern is answering, and writes
+  only what the chat supports. Anything you edited by hand it leaves alone.
+- **A model of your choosing**: SillyTavern's current connection, a **separate
+  connection profile** (a different, cheaper model — the point of the feature),
+  or a bare OpenAI-compatible endpoint.
+- **A board per chat** — each roleplay writes its own map. One shared board is
+  still one toggle away.
 - **Force-directed relationship graph** rendered on canvas — smooth with a few
   characters or a few hundred.
 - **Four bond types**, each encoded by colour *and* line style so they stay
@@ -94,7 +121,8 @@ Open the graph from the floating heart, the wand (extensions) menu, the
 | Double tap the background | Fit everything on screen |
 
 **Toolbar:** sync characters · add (NPC, group, sync) · new bond · chronicle ·
-fit · rebuild layout · filters · data (import/export/clear) · language.
+**director** · fit · rebuild layout · filters · data (import/export/clear) ·
+language.
 
 With **story mode** on (the default) the graph starts empty and fills itself in
 as you play: the chronicle reads each new message, brings a soul onto the board
@@ -125,6 +153,78 @@ graph — it is marked with a dashed ring so the bonds around it survive.
 Anything you edit by hand is yours: the chronicle stops steering that bond and
 marks it *yours*. The bond card has a button to hand it back.
 
+## The director
+
+The chronicle can tell that two people keep sharing scenes. It cannot tell that
+"the innkeeper" from chapter one is the woman the party now calls Marta, that
+she is frightened rather than hostile, or write down who she is. That is what
+the director is for.
+
+Switch it on in **Extensions → MyLove Graph → Director**, or from the ✧ button
+in the toolbar. Then every few messages it hands the new scenes to a model,
+along with the cast and bonds already on the board, and asks for JSON back:
+
+```json
+{
+  "characters": [
+    { "name": "Marta", "aka": ["the innkeeper"], "role": "innkeeper",
+      "summary": "Runs the tavern and knows the road north.",
+      "traits": ["watchful", "warm"] }
+  ],
+  "relations": [
+    { "a": "Marta", "b": "Boris", "type": "love", "strength": 62,
+      "dir": "b2a", "label": "lingering looks", "confidence": 0.8 }
+  ],
+  "events": ["Marta lingers near Boris."]
+}
+```
+
+New names walk onto the board with their role and profile; known ones are
+matched against the cast (aliases and Russian declensions included) and updated
+rather than duplicated. A relation the model is unsure about is dropped, and a
+bond the scenes say is over gets cut.
+
+### Which model writes it
+
+| Source | What it means |
+| --- | --- |
+| **Main connection** | Whatever SillyTavern is connected to right now. Nothing to set up, but every pass competes with the roleplay for the same backend. |
+| **Separate profile** | A saved **connection profile** (SillyTavern's Connection Manager: API, model and preset in one). Point it at something small and fast and your main model is never interrupted. |
+| **Custom endpoint** | Any OpenAI-compatible URL — llama.cpp, Ollama, LM Studio, a proxy. It has to accept requests from the SillyTavern page (CORS), and the key is stored in plain SillyTavern settings, so use a local backend or a key you can revoke. |
+
+The profile picker is also in the toolbar menu, so switching the scribe mid-chat
+is two taps.
+
+### What it is allowed to do
+
+Every one of these is a toggle, in the settings card and in the toolbar menu:
+
+- *Read new scenes by itself* — off means it only ever runs when you ask.
+- *Bring in new souls* / *Draw new bonds* / *Write roles and profiles*.
+- *Read every N messages*, *Messages per pass*, *Re-read depth*, *Answer
+  budget*, *New souls per pass* — how often it runs and how much it may spend.
+- *Writes in* — the language of everything it writes (defaults to the
+  interface language).
+
+**Write a dossier** on a selected character asks for a close-up built only from
+the scenes they appear in: appearance, character, what they want, what they
+keep to themselves. **Re-read this chat** rebuilds its work one window at a
+time, and says up front how many requests that is.
+
+Nothing the director writes is precious: *Forget what it wrote* drops all of it
+and leaves your own work untouched.
+
+## A board for every chat
+
+By default each chat keeps its own board, which is what makes a self-writing map
+usable at all — a cast generated inside one roleplay has no business turning up
+in the next one. Turn *A board for every chat* off for a single shared board,
+the way older versions worked (installs upgrading from 1.1 keep their shared
+board, and there is a button to copy it into the current chat).
+
+Boards are pruned to the ten most recently used, except ones you have worked on
+by hand, which are always kept.
+
 ## Settings
 
 Found under **Extensions → MyLove Graph**.
@@ -132,6 +232,14 @@ Found under **Extensions → MyLove Graph**.
 | Setting | Meaning |
 | --- | --- |
 | Language | English or Russian |
+| A board for every chat | Per-chat boards, or one shared map |
+| Let a model write the map | The director on or off |
+| Which model writes it | Main connection · separate profile · custom endpoint |
+| Read new scenes by itself | Automatic passes, or only when you ask |
+| Bring in new souls / Draw new bonds / Write roles and profiles | What the director may write |
+| Read every N messages · Messages per pass · Re-read depth · Answer budget · New souls per pass | How often it runs and how much it spends |
+| Writes in | The language the director writes in |
+| Test the connection | One tiny request that proves the wire works |
 | Grow bonds from the chat | Story mode on or off |
 | Only souls the story met | Keep the board to the cast that has actually appeared |
 | Count names in the text | Also read who is *mentioned*, not only who speaks |
@@ -165,7 +273,9 @@ Animations also respect the system `prefers-reduced-motion` setting.
 
 Everything is stored in SillyTavern's own settings under
 `extension_settings.mylove_graph` (so it travels with your profile), falling
-back to `localStorage` if that store is unavailable.
+back to `localStorage` if that store is unavailable. Per-chat boards live under
+`boards[chatId]`, the shared one under `graph`, and the director's reading
+progress and story log under `ai.chats[chatId]`.
 
 Export produces:
 
@@ -177,21 +287,24 @@ Export produces:
     { "id": "char:seraphina.png", "kind": "char", "name": "Seraphina",
       "avatar": "seraphina.png", "role": "", "aliases": "", "note": "",
       "color": "", "x": 12.4, "y": -88.1, "pinned": false,
-      "origin": "story", "seen": 42 }
+      "origin": "ai", "seen": 42, "bio": "Runs the tavern.",
+      "traits": ["watchful"], "dossier": { "appearance": "…" },
+      "edited": false }
   ],
   "edges": [
     { "id": "e:...", "a": "char:seraphina.png", "b": "npc:...",
       "type": "love", "strength": 82, "dir": "a2b", "note": "unrequited",
-      "origin": "story", "progress": 64, "locked": false, "hits": 19,
-      "since": 51, "lastAt": 128 }
+      "origin": "ai", "progress": 64, "locked": false, "hits": 19,
+      "since": 51, "lastAt": 128, "confidence": 0.8 }
   ]
 }
 ```
 
 `kind` is `char`, `npc` or `persona`. `dir` is `both`, `a2b` or `b2a`.
-`origin` is `story` for whatever the chronicle wrote and `manual` for the rest;
-`progress` is how far a story bond has come (0–100), `seen`/`since` are the
-message it started from. A version 1 export still imports — its bonds simply
+`origin` is `story` for whatever the chronicle wrote, `ai` for the director,
+and `manual` for the rest; `progress` is how far a bond has come (0–100),
+`seen`/`since` are the message it started from, and `edited` marks a soul you
+have written yourself (the director then fills in blanks only). A version 1 export still imports — its bonds simply
 come back finished. Importing replaces the current board, so export first if you
 want a backup.
 
@@ -206,6 +319,18 @@ MyLoveGraph.story.status();    // { applied, total, chapter, sparks, settled }
 MyLoveGraph.story.read();      // fold whatever is new in the chat
 MyLoveGraph.story.rebuild();   // re-read the chat from the start
 MyLoveGraph.story.forget();    // drop every story bond
+```
+
+…and the director:
+
+```js
+MyLoveGraph.director.status();     // { enabled, target, analyzed, total, souls, bonds, … }
+MyLoveGraph.director.test();       // prove the connection works
+MyLoveGraph.director.read();       // one pass over whatever is new
+MyLoveGraph.director.rebuild();    // re-read this chat, window by window
+MyLoveGraph.director.dossier(id);  // a close-up on one soul
+MyLoveGraph.director.log();        // the story log of this chat
+MyLoveGraph.director.forget();     // drop everything it wrote here
 ```
 
 While the window is open, `<html>` carries the `mlg-open` class, which is handy

@@ -7,12 +7,22 @@
  */
 
 import { setHost, on as onStEvent } from './src/host.js';
-import { initState, getSettings, save, onStateChange, storyEnabled } from './src/state.js';
+import {
+    initState,
+    getSettings,
+    save,
+    onStateChange,
+    storyEnabled,
+    directorEnabled,
+    setActiveBoard,
+    onBoardChange,
+} from './src/state.js';
 import { setLanguage } from './src/i18n.js';
 import { el, icon } from './src/dom.js';
 import { initViewport } from './src/viewport.js';
 import * as model from './src/model.js';
 import * as chronicle from './src/chronicle.js';
+import * as director from './src/director.js';
 import * as panel from './src/panel.js';
 import { createFab, updateFab, setFabVisible } from './src/fab.js';
 import { mountSettings, refreshSettings } from './src/settingsUi.js';
@@ -171,10 +181,12 @@ function scheduleAutoSync() {
     clearTimeout(syncTimer);
     syncTimer = setTimeout(() => {
         try {
-            // In story mode with "only souls the story met" on, the cast walks
-            // in on its own and a refresh just keeps the board current.
+            // When the story writes the cast itself - either engine - a refresh
+            // only keeps the souls already on the board current. Nobody new is
+            // dropped onto a map that is supposed to fill in behind the story.
             const story = getSettings().story;
-            model.syncCharacters({ addNew: !storyEnabled() || !story.cast });
+            const writesItsOwnCast = (storyEnabled() && story.cast) || directorEnabled();
+            model.syncCharacters({ addNew: !writesItsOwnCast });
             if (panel.isOpen()) panel.refresh();
             refreshSettings();
         } catch (err) {
@@ -210,6 +222,44 @@ function bindChronicle() {
     });
 }
 
+/* --------------------------------------------------------------- director */
+
+/** Wires the model-driven director to the same message events. */
+function bindDirector() {
+    for (const eventName of ['MESSAGE_RECEIVED', 'MESSAGE_SENT', 'GENERATION_ENDED', 'MESSAGE_SWIPED', 'MESSAGE_DELETED']) {
+        onStEvent(eventName, () => director.schedule());
+    }
+
+    director.onDirector(event => {
+        if (!event) return;
+        // A pass that changed nothing still moves the counters in the HUD.
+        panel.refresh();
+        refreshSettings();
+    });
+}
+
+/* ------------------------------------------------- the board follows the chat */
+
+/**
+ * Points the extension at the board of whatever chat is open. With per-chat
+ * boards on, this is what makes one roleplay's cast stay in that roleplay.
+ */
+function bindBoard() {
+    const follow = () => {
+        if (!setActiveBoard()) return;
+        chronicle.schedule(700);
+        director.schedule(2500);
+    };
+
+    onStEvent('CHAT_CHANGED', follow);
+    onStEvent('APP_READY', follow);
+    onBoardChange(() => {
+        panel.rebind();
+        refreshSettings();
+    });
+    setActiveBoard();
+}
+
 /* ------------------------------------------------------------------ boot */
 
 async function boot() {
@@ -235,10 +285,14 @@ async function boot() {
         mountWandItem();
         scheduleAutoSync();
         chronicle.schedule(1200);
+        director.schedule(3000);
     });
+    bindBoard();
     bindChronicle();
+    bindDirector();
     // The chat may already be loaded when a build has no APP_READY event.
     chronicle.schedule(1500);
+    director.schedule(4000);
 
     try {
         const context = (window.SillyTavern?.getContext?.()) || null;
@@ -267,6 +321,18 @@ async function boot() {
             forget: () => chronicle.forget(),
             status: () => chronicle.status(),
         },
+        // The director: the same story, read by a model.
+        director: {
+            read: () => director.analyze(),
+            rebuild: onProgress => director.rebuild(onProgress),
+            dossier: id => director.dossier(id),
+            forget: () => director.forget(),
+            status: () => director.status(),
+            log: () => director.storyLog(),
+            test: () => director.test(),
+            cancel: () => director.cancel(),
+        },
+        board: () => setActiveBoard(),
     };
 
     console.log(LOG, 'ready');

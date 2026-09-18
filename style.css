@@ -1624,6 +1624,161 @@
     .mlg-basis { padding: 6px 9px; }
 }
 
+/* ============================================================== director ==
+
+   The second engine: the map written by a model. It gets the aqua end of the
+   palette so a glance tells the two apart - pink is what the chronicle counted,
+   aqua is what the director read.
+   ========================================================================= */
+
+.mlg-tool--ai { color: var(--mlg-aqua); }
+.mlg-tool--ai:hover { border-color: rgba(79, 214, 200, 0.55); box-shadow: 0 0 14px rgba(79, 214, 200, 0.25); }
+
+.mlg-chronicle--ai { cursor: pointer; }
+.mlg-chronicle--ai .mlg-chronicle-tag { display: inline-flex; gap: 4px; align-items: center; color: var(--mlg-aqua); }
+.mlg-chronicle--ai .mlg-chronicle-line i { background: linear-gradient(90deg, var(--mlg-aqua), var(--mlg-violet)); box-shadow: 0 0 10px rgba(79, 214, 200, 0.6); }
+.mlg-chronicle--ai .mlg-chronicle-busy { color: var(--mlg-aqua); }
+
+.mlg-chronicle-warn {
+    margin-top: 4px;
+    font-family: var(--mlg-mono);
+    font-size: 9px;
+    line-height: 1.4;
+    color: var(--mlg-ember);
+    overflow-wrap: anywhere;
+}
+
+.mlg-tag--ai {
+    color: var(--mlg-aqua);
+    border-style: dashed;
+}
+
+/* ------------------------------------------------- the profile it writes */
+
+.mlg-insp-bio { display: flex; flex-direction: column; gap: 5px; }
+.mlg-insp-byline { display: inline-flex; margin-left: 6px; color: var(--mlg-aqua); vertical-align: middle; }
+.mlg-insp-section { display: flex; gap: 6px; align-items: center; }
+
+.mlg-traits { display: flex; flex-wrap: wrap; gap: 5px; }
+
+.mlg-trait {
+    padding: 2px 8px;
+    font-family: var(--mlg-mono);
+    font-size: 9px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--mlg-aqua);
+    border: 1px solid rgba(79, 214, 200, 0.4);
+    border-radius: 999px;
+    background: rgba(79, 214, 200, 0.08);
+}
+
+.mlg-dossier {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 9px 11px;
+    border: 1px dashed rgba(79, 214, 200, 0.32);
+    border-radius: 10px;
+    background: rgba(79, 214, 200, 0.05);
+}
+
+.mlg-dossier-row { display: flex; flex-direction: column; gap: 2px; }
+
+.mlg-dossier-label {
+    font-family: var(--mlg-mono);
+    font-size: 8.5px;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    color: var(--mlg-aqua);
+}
+
+.mlg-dossier-text { margin: 0; font-size: 12.5px; line-height: 1.5; color: var(--mlg-dim); }
+
+.mlg-btn--spark { display: inline-flex; gap: 6px; align-items: center; color: var(--mlg-aqua); }
+.mlg-btn--spark .mlg-icon { opacity: 0.85; }
+
+/* ----------------------------------------------------------- story log */
+
+.mlg-log { display: flex; flex-direction: column; gap: 8px; max-height: 52vh; overflow-y: auto; }
+
+.mlg-log-row {
+    display: flex;
+    gap: 9px;
+    align-items: baseline;
+    padding-bottom: 7px;
+    border-bottom: 1px dashed var(--mlg-line);
+}
+
+.mlg-log-row:last-child { border-bottom: 0; padding-bottom: 0; }
+
+.mlg-log-index {
+    flex: 0 0 auto;
+    font-family: var(--mlg-mono);
+    font-size: 9px;
+    letter-spacing: 0.08em;
+    color: var(--mlg-aqua);
+}
+
+.mlg-log-text { margin: 0; font-size: 13px; line-height: 1.45; color: var(--mlg-dim); }
+
+/* --------------------------------------------- the settings card section */
+
+.mlg-set-group--ai {
+    padding: 10px;
+    border: 1px solid rgba(79, 214, 200, 0.22);
+    border-radius: 12px;
+    background: rgba(79, 214, 200, 0.04);
+}
+
+.mlg-set-group--ai .mlg-set-title { color: var(--mlg-aqua); }
+.mlg-set-spark { display: inline-flex; color: var(--mlg-aqua); vertical-align: -1px; }
+
+.mlg-set-stack { display: flex; flex-direction: column; gap: 8px; }
+
+.mlg-set-field { display: flex; flex-direction: column; gap: 4px; }
+
+.mlg-set-label {
+    font-family: var(--mlg-mono);
+    font-size: 9px;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--mlg-faint);
+}
+
+.mlg-set-note { font-size: 11px; line-height: 1.45; color: var(--mlg-faint); margin: 0; }
+
+.mlg-set-warn {
+    margin: 0;
+    padding: 6px 8px;
+    font-size: 11.5px;
+    line-height: 1.45;
+    color: var(--mlg-ember);
+    border: 1px dashed rgba(255, 106, 61, 0.45);
+    border-radius: 8px;
+    background: rgba(255, 106, 61, 0.07);
+    overflow-wrap: anywhere;
+}
+
+.mlg-set-stat[data-tone="warn"] { color: var(--mlg-ember); border-color: rgba(255, 106, 61, 0.45); }
+
+.mlg-set-nums { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.mlg-set-field--num { gap: 3px; }
+.mlg-input--sm { padding: 7px 9px; font-size: 12.5px; }
+.mlg-input--num { padding: 6px 8px; font-size: 12.5px; text-align: center; }
+
+.mlg-card-board {
+    font-family: var(--mlg-mono);
+    font-size: 9px;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--mlg-aqua);
+}
+
+@media (max-width: 480px) {
+    .mlg-set-nums { grid-template-columns: 1fr; }
+}
+
 @media (prefers-reduced-motion: reduce) {
     .mlg-root *,
     .mlg-fab,

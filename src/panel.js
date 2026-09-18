@@ -4,11 +4,20 @@
 
 import { el, clear, icon } from './dom.js';
 import { t, applyI18n, onLanguageChange, setLanguage, getLanguage, LANGUAGES } from './i18n.js';
-import { getSettings, save, isLite, animationsEnabled, isTouchDevice, storyEnabled } from './state.js';
+import {
+    getSettings,
+    save,
+    isLite,
+    animationsEnabled,
+    isTouchDevice,
+    storyEnabled,
+} from './state.js';
 import { LoveGraph } from './graph.js';
 import { groups } from './host.js';
 import { viewportRect } from './viewport.js';
 import * as chronicle from './chronicle.js';
+import * as director from './director.js';
+import * as llm from './llm.js';
 import * as model from './model.js';
 
 let root = null;
@@ -89,6 +98,7 @@ function build() {
             buildToolbarButton('plus', 'tb.add', anchor => openAddMenu(anchor)),
             buildToolbarButton('link', 'tb.link', () => openEdgeEditor({})),
             buildToolbarButton('story', 'tb.story', anchor => openStoryMenu(anchor), 'mlg-tool--story'),
+            buildToolbarButton('spark', 'tb.ai', anchor => openDirectorMenu(anchor), 'mlg-tool--ai'),
         ]),
         el('div.mlg-search', {}, [
             icon('search', 15),
@@ -232,7 +242,9 @@ export function open() {
         if (!didFirstSync) {
             didFirstSync = true;
             const settings = getSettings();
-            const wantsWholeCast = !storyEnabled() || !settings.story.cast;
+            // The whole card list is only dumped on the board when nothing
+            // else is filling it in from the chat.
+            const wantsWholeCast = !settings.ai.enabled && (!storyEnabled() || !settings.story.cast);
             if (wantsWholeCast && !model.nodes().length && settings.behaviour.autoSync) {
                 doSync(true);
             }
@@ -270,6 +282,21 @@ export function close() {
 export function toggle() {
     if (opened) close();
     else open();
+}
+
+/**
+ * The chat changed under us, so this is a different board now: drop the
+ * selection that belonged to the old one and redraw from scratch.
+ */
+export function rebind() {
+    if (!root) return;
+    selection = null;
+    graph?.select(null, false);
+    syncGraph();
+    if (opened) {
+        graph?.kick(0.6);
+        graph?.fit();
+    }
 }
 
 /** Called when settings change outside the panel. */
@@ -407,6 +434,7 @@ function renderBasis() {
     ]));
 
     renderChronicle();
+    renderDirectorStrip();
 }
 
 /**
@@ -436,6 +464,36 @@ function renderChronicle() {
     ]));
 }
 
+/**
+ * The director strip: which model is writing this map, how far it has read and
+ * how much of the board is its work.
+ */
+function renderDirectorStrip() {
+    if (!basis || !getSettings().ai.enabled) return;
+    const state = director.status();
+    const ratio = state.total ? Math.min(1, state.analyzed / state.total) : 0;
+
+    basis.appendChild(el('div.mlg-chronicle.mlg-chronicle--ai', {
+        onTap: () => openStoryLog(),
+        title: t('ai.log'),
+    }, [
+        el('div.mlg-chronicle-head', {}, [
+            el('span.mlg-chronicle-tag', {}, [icon('spark', 11), ' ' + t('hud.director')]),
+            el('span.mlg-chronicle-count', { text: `${state.analyzed}/${state.total}` }),
+        ]),
+        el('div.mlg-chronicle-line', {}, [
+            el('i', { style: { width: Math.round(ratio * 100) + '%' } }),
+        ]),
+        el('div.mlg-chronicle-foot', {}, [
+            el('span', { text: t('hud.aiSouls', { n: state.souls }) }),
+            el('span.mlg-basis-dot'),
+            el('span', { text: t('hud.aiPending', { n: state.pending }) }),
+            state.busy ? el('span.mlg-chronicle-busy', { text: t('ai.reading') }) : null,
+        ]),
+        state.error ? el('div.mlg-chronicle-warn', { text: state.error }) : null,
+    ]));
+}
+
 /* ------------------------------------------------------------ empty state */
 
 function renderEmpty() {
@@ -449,7 +507,12 @@ function renderEmpty() {
     emptyState.appendChild(el('h3', { text: t(story ? 'empty.story.title' : 'empty.title') }));
     emptyState.appendChild(el('p', { text: t(story ? 'empty.story.body' : 'empty.body') }));
     emptyState.appendChild(el('div.mlg-empty-actions', {}, [
-        story ? el('button.mlg-btn.mlg-btn--primary', {
+        getSettings().ai.enabled && llm.readiness().ok ? el('button.mlg-btn.mlg-btn--primary', {
+            type: 'button',
+            text: t('empty.ai.cta'),
+            onTap: () => runDirectorPass(),
+        }) : null,
+        story ? el('button.mlg-btn' + (getSettings().ai.enabled ? '.mlg-btn--ghost' : '.mlg-btn--primary'), {
             type: 'button',
             text: t('empty.story.cta'),
             onTap: () => {
@@ -540,7 +603,8 @@ function renderNodeInspector(node) {
             el('div.mlg-insp-tags', {}, [
                 el('span.mlg-tag', { text: t('insp.kind.' + node.kind) }),
                 node.role ? el('span.mlg-tag.mlg-tag--soft', { text: node.role }) : null,
-                node.origin === 'story' && typeof node.seen === 'number'
+                node.origin === 'ai' ? el('span.mlg-tag.mlg-tag--ai', { text: t('insp.byAi') }) : null,
+                (node.origin === 'story' || node.origin === 'ai') && typeof node.seen === 'number'
                     ? el('span.mlg-tag.mlg-tag--story', { text: t('insp.enteredAt', { n: node.seen + 1 }) })
                     : null,
                 node.missing ? el('span.mlg-tag.mlg-tag--warn', { text: t('insp.missing') }) : null,
@@ -551,6 +615,8 @@ function renderNodeInspector(node) {
     if (node.note) {
         inspector.appendChild(el('p.mlg-insp-note', { text: node.note }));
     }
+
+    renderProfile(node);
 
     inspector.appendChild(el('div.mlg-insp-actions', {}, [
         el('button.mlg-btn.mlg-btn--primary', {
@@ -578,7 +644,15 @@ function renderNodeInspector(node) {
             text: t('insp.focus'),
             onTap: () => graph.focus(node.id),
         }),
-    ]));
+        getSettings().ai.enabled && llm.readiness().ok
+            ? el('button.mlg-btn.mlg-btn--ghost.mlg-btn--spark', {
+                type: 'button',
+                text: t('ai.dossier'),
+                disabled: director.status().busy,
+                onTap: () => writeDossier(node),
+            }, [icon('spark', 14)])
+            : null,
+    ].filter(Boolean)));
 
     const bonds = model.edgesOf(node.id)
         .slice()
@@ -608,6 +682,42 @@ function renderNodeInspector(node) {
             showToast(t('toast.nodeRemoved', { name: node.name }));
         }),
     }));
+}
+
+/**
+ * Everything the director has written about a soul: the short read, the traits
+ * it hung on them, and the dossier when one was asked for.
+ */
+function renderProfile(node) {
+    if (node.bio) {
+        inspector.appendChild(el('div.mlg-insp-bio', {}, [
+            el('h4.mlg-insp-section', {}, [
+                el('span', { text: t('insp.bio') }),
+                node.origin === 'ai' || typeof node.lastAi === 'number'
+                    ? el('span.mlg-insp-byline', {}, [icon('spark', 11)])
+                    : null,
+            ]),
+            el('p.mlg-insp-note', { text: node.bio }),
+        ]));
+    }
+
+    if (Array.isArray(node.traits) && node.traits.length) {
+        inspector.appendChild(el('div.mlg-traits', {},
+            node.traits.map(trait => el('span.mlg-trait', { text: trait }))));
+    }
+
+    const dossier = node.dossier;
+    if (!dossier) return;
+    const rows = ['appearance', 'personality', 'goal', 'secret', 'voice']
+        .filter(field => dossier[field])
+        .map(field => el('div.mlg-dossier-row', {}, [
+            el('span.mlg-dossier-label', { text: t('insp.' + field) }),
+            el('p.mlg-dossier-text', { text: dossier[field] }),
+        ]));
+    if (!rows.length) return;
+
+    inspector.appendChild(el('h4.mlg-insp-section', { text: t('insp.dossier') }));
+    inspector.appendChild(el('div.mlg-dossier', {}, rows));
 }
 
 function bondRow(edge, fromId) {
@@ -1023,6 +1133,197 @@ function openStoryMenu(anchor) {
     ]);
 }
 
+/**
+ * The director menu: which model writes this map, what it is allowed to write,
+ * and the three things you ever want to do to it by hand.
+ */
+function openDirectorMenu(anchor) {
+    const settings = getSettings();
+    const ai = settings.ai;
+    const state = director.status();
+    const ready = llm.readiness();
+
+    const flag = (key, labelKey) => ({
+        label: t(labelKey),
+        checked: ai[key] !== false,
+        keepOpen: true,
+        run: () => {
+            ai[key] = ai[key] === false;
+            save();
+            openDirectorMenu(anchor);
+        },
+    });
+
+    const sourceItem = (value, labelKey) => ({
+        label: t(labelKey),
+        checked: ai.source === value,
+        keepOpen: true,
+        run: () => {
+            ai.source = value;
+            save();
+            openDirectorMenu(anchor);
+        },
+    });
+
+    // When the map is written by a separate profile, switching between them is
+    // the one thing worth having under the thumb.
+    const profiles = ai.source === 'profile' ? llm.connectionProfiles() : [];
+    const profileItems = profiles.length
+        ? [
+            { type: 'separator' },
+            { type: 'title', label: t('ai.profile') },
+            ...profiles.slice(0, 8).map(profile => ({
+                label: profile.model ? `${profile.name} · ${profile.model}` : profile.name,
+                checked: ai.profileId === profile.id,
+                keepOpen: true,
+                run: () => {
+                    ai.profileId = profile.id;
+                    save();
+                    openDirectorMenu(anchor);
+                },
+            })),
+        ]
+        : (ai.source === 'profile' ? [{ type: 'note', label: t('ai.noProfiles') }] : []);
+
+    openMenu(anchor, [
+        { type: 'title', label: t('ai.title') },
+        {
+            label: t('ai.enable'),
+            checked: !!ai.enabled,
+            keepOpen: true,
+            run: () => {
+                ai.enabled = !ai.enabled;
+                save();
+                renderAll();
+                if (ai.enabled) director.schedule(600);
+                openDirectorMenu(anchor);
+            },
+        },
+        {
+            type: 'note',
+            label: ready.ok
+                ? t('ai.target', { target: llm.targetLabel() })
+                : t('ai.failed', { error: t('ai.reason.' + ready.reason) }),
+        },
+        {
+            type: 'note',
+            label: t('ai.stats', {
+                read: state.analyzed,
+                total: state.total,
+                runs: state.runs,
+                souls: state.souls,
+                bonds: state.bonds,
+            }),
+        },
+        { type: 'separator' },
+        { type: 'title', label: t('ai.source') },
+        sourceItem('main', 'ai.source.main'),
+        sourceItem('profile', 'ai.source.profile'),
+        sourceItem('custom', 'ai.source.custom'),
+        ...profileItems,
+        ai.source === 'custom' ? { type: 'note', label: t('ai.customHint') } : null,
+        { type: 'separator' },
+        flag('auto', 'ai.auto'),
+        flag('newSouls', 'ai.newSouls'),
+        flag('newBonds', 'ai.newBonds'),
+        flag('profiles', 'ai.profiles'),
+        { type: 'separator' },
+        state.busy
+            ? { icon: 'close', label: t('ai.stop'), tone: 'danger', run: () => director.cancel() }
+            : {
+                icon: 'spark',
+                label: t('ai.analyze'),
+                disabled: !ready.ok,
+                run: () => runDirectorPass(),
+            },
+        {
+            icon: 'rewind',
+            label: t('ai.rebuild'),
+            disabled: state.busy || !ready.ok,
+            run: () => runDirectorRebuild(),
+        },
+        { icon: 'story', label: t('ai.log'), run: () => openStoryLog() },
+        {
+            icon: 'trash',
+            label: t('ai.forget'),
+            tone: 'danger',
+            run: () => confirmDialog(t('ai.confirmForget'), () => {
+                director.forget();
+                selection = null;
+                graph.select(null, false);
+                syncGraph();
+            }),
+        },
+    ].filter(Boolean));
+}
+
+/** What the director has written down about this chat, newest first. */
+function openStoryLog() {
+    const entries = director.storyLog();
+    const body = el('div.mlg-log');
+    if (!entries.length) {
+        body.appendChild(el('p.mlg-insp-empty', { text: t('ai.logEmpty') }));
+    }
+    for (const entry of entries) {
+        body.appendChild(el('div.mlg-log-row', {}, [
+            el('span.mlg-log-index', { text: '#' + entry.index }),
+            el('p.mlg-log-text', { text: entry.text }),
+        ]));
+    }
+    openModal({ title: t('ai.log'), body, actions: [] });
+}
+
+/* -------------------------------------------------- the director, by hand */
+
+async function runDirectorPass() {
+    showToast(t('ai.reading'));
+    renderAll();
+    try {
+        const result = await director.analyze();
+        syncGraph();
+        graph?.kick(0.6);
+        showToast(result
+            ? t('ai.done', { souls: result.souls, bonds: result.bonds, changed: result.changed })
+            : t('ai.nothing'));
+    } catch (err) {
+        showToast(t('ai.failed', { error: String(err?.message || err) }));
+    }
+    renderAll();
+}
+
+async function runDirectorRebuild() {
+    const ai = getSettings().ai;
+    const state = director.status();
+    const passes = Math.max(1, Math.ceil(Math.min(state.total, ai.depth) / Math.max(4, ai.window)));
+    confirmDialog(t('ai.confirmRebuild', { n: passes }), async () => {
+        try {
+            const result = await director.rebuild(progress => {
+                showToast(t('ai.rebuilding', { done: progress.done + 1, of: progress.of }));
+                syncGraph();
+            });
+            syncGraph();
+            graph?.relayout();
+            showToast(t('ai.done', { souls: result.souls, bonds: result.bonds, changed: result.changed }));
+        } catch (err) {
+            showToast(t('ai.failed', { error: String(err?.message || err) }));
+        }
+        renderAll();
+    });
+}
+
+/** Asks the model for a full dossier on one soul. */
+async function writeDossier(node) {
+    showToast(t('ai.dossierBusy'));
+    try {
+        await director.dossier(node.id);
+        syncGraph();
+        showToast(t('ai.dossierDone', { name: node.name }));
+    } catch (err) {
+        showToast(t('ai.failed', { error: String(err?.message || err) }));
+    }
+    renderInspector();
+}
+
 function openLanguageMenu(anchor) {
     openMenu(anchor, LANGUAGES.map(lang => ({
         label: lang.label,
@@ -1226,7 +1527,7 @@ function openNodeEditor(node) {
                         color,
                     };
                     if (isNew) {
-                        const created = model.addNode({ ...patch, kind: 'npc' });
+                        const created = model.addNode({ ...patch, kind: 'npc', edited: true });
                         syncGraph();
                         graph.kick(0.7);
                         selection = { type: 'node', id: created.id };
@@ -1234,7 +1535,9 @@ function openNodeEditor(node) {
                         renderInspector();
                         renderBasis();
                     } else {
-                        Object.assign(draft, patch);
+                        // From here on this soul is the user's: the director
+                        // fills in what is still blank and nothing else.
+                        Object.assign(draft, patch, { edited: true });
                         save();
                         syncGraph();
                     }

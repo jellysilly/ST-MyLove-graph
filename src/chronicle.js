@@ -65,8 +65,12 @@ let replaying = false;
  * it, and a stem (the word minus its last letter) so Russian cases still land on
  * the right character. Anything ambiguous between two souls is dropped rather
  * than guessed.
+ *
+ * Exported because the director needs the very same lookup: when a model
+ * reports "Ария", that has to land on the card named "Aria" instead of walking
+ * a second copy of her onto the board.
  */
-function buildCast() {
+export function buildCast() {
     const AMBIGUOUS = Symbol('ambiguous');
     const index = new Map();
     const people = [];
@@ -208,6 +212,8 @@ function touchPair(aId, bId, weight, votes, index, state) {
 
     if (edge) {
         edge.lastAt = index;
+        // Hand-made, hand-edited and director-written bonds are not the word
+        // counter's to steer - it only notes that the pair is still in play.
         if (edge.locked || edge.origin !== 'story') return;
         edge.hits = (edge.hits || 0) + 1;
         if (!edge.votes) edge.votes = { love: 0, close: 0, friendly: 0, tense: 0 };
